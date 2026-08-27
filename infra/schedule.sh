@@ -14,14 +14,18 @@ PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(project
 INVOKER_SA="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
 
 echo "== Scheduler heartbeat -> ${API_URL}/monitor/dispatch (every 2 min) =="
-gcloud scheduler jobs create http safejourney-heartbeat \
-  --location "$REGION" \
-  --schedule "*/2 * * * *" \
-  --uri "${API_URL}/monitor/dispatch" \
-  --http-method POST \
-  --oidc-service-account-email "$(gcloud config get-value account)" \
-  2>/dev/null || gcloud scheduler jobs update http safejourney-heartbeat \
-  --location "$REGION" --schedule "*/2 * * * *" --uri "${API_URL}/monitor/dispatch"
+# agent-api is public (--allow-unauthenticated), so the heartbeat needs no auth token.
+# (To secure it later, create a service account, grant it run.invoker on safejourney-api,
+#  and add: --oidc-service-account-email <that-sa>.)
+if gcloud scheduler jobs describe safejourney-heartbeat --location "$REGION" >/dev/null 2>&1; then
+  gcloud scheduler jobs update http safejourney-heartbeat \
+    --location "$REGION" --schedule "*/2 * * * *" \
+    --uri "${API_URL}/monitor/dispatch" --http-method POST
+else
+  gcloud scheduler jobs create http safejourney-heartbeat \
+    --location "$REGION" --schedule "*/2 * * * *" \
+    --uri "${API_URL}/monitor/dispatch" --http-method POST
+fi
 
 echo "== Pub/Sub push subscription -> ${WORKER_URL}/pubsub/push =="
 # Allow Pub/Sub to mint OIDC tokens for the worker.
