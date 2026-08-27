@@ -1,0 +1,12 @@
+{
+  "name": "SafeJourney",
+  "short_name": "SafeJourney",
+  "description": "An agentic travel-safety companion that watches the road ahead.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08151A",
+  "theme_color": "#08151A",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

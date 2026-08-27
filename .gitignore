@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*-service-account.json
+serviceAccount*.json
+gcp-key*.json
+
+# Build / OS
+.DS_Store
+Thumbs.db
+*.log
+coverage/
+.firebase/

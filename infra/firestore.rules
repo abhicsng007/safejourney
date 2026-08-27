@@ -1,0 +1,37 @@
+rules_version = '2';
+// SafeJourney Firestore security rules.
+// Users read/write only their own profile and trips; incidents are readable by all signed-in
+// users (crowd hazard map) and writable by the owner of the report. The backend services use
+// the Admin SDK and bypass these rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    match /trips/{tripId} {
+      allow read, write: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+    }
+
+    match /alerts/{alertId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false; // only the backend writes alerts
+    }
+
+    match /snapshots/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /incidents/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# The worker reuses the agent-api package (engine + tools + repo) and the shared package.
+# In the Docker image these are installed from the monorepo (see Dockerfile).
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.5
+httpx>=0.27
+google-cloud-firestore>=2.16
+google-cloud-pubsub>=2.21
+firebase-admin>=6.5
+google-genai>=0.3.0

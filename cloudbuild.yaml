@@ -1,0 +1,33 @@
+# Builds both SafeJourney service images from the repo root (so each Dockerfile has access
+# to packages/shared). Used by infra/deploy.sh:
+#   gcloud builds submit --config cloudbuild.yaml --substitutions _REGION=us-central1 .
+substitutions:
+  _REGION: us-central1
+  _REPO: safejourney
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/agent-api/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api:latest
+      - .
+  - id: build-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/monitor-worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/worker:latest
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/api:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/worker:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,509 @@
+import { useEffect, useRef, useState, useCallback } from "react";
+import MapView from "./components/MapView.jsx";
+import { api } from "./api.js";
+import { decodePolyline } from "./lib/polyline.js";
+import {
+  RATING_COLOR,
+  ACTION_META,
+  DEMO_HAZARDS,
+  HAZARD_ICON,
+  hazardLabel,
+} from "./lib/hazards.js";
+
+const MODES = [
+  { id: "walk", ic: "🚶", label: "Walk" },
+  { id: "two_wheeler", ic: "🛵", label: "2-Wheeler" },
+  { id: "car", ic: "🚗", label: "Car" },
+  { id: "transit", ic: "🚇", label: "Transit" },
+];
+
+const PRESETS = [
+  { name: "Bengaluru · MG Road → Whitefield", o: { lat: 12.9757, lng: 77.605 }, d: { lat: 12.9698, lng: 77.75 } },
+  { name: "Bengaluru · Koramangala → Airport", o: { lat: 12.9352, lng: 77.6245 }, d: { lat: 13.1986, lng: 77.7066 } },
+  { name: "Uttarakhand · Rishikesh → Joshimath (GLOF basin)", o: { lat: 30.0869, lng: 78.2676 }, d: { lat: 30.5556, lng: 79.5626 } },
+  { name: "Sikkim · Gangtok → Chungthang (Teesta)", o: { lat: 27.3314, lng: 88.6138 }, d: { lat: 27.6009, lng: 88.6448 } },
+];
+
+function fmtKm(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+function fmtMin(s) {
+  return `${Math.round(s / 60)} min`;
+}
+function pointAtFraction(coords, f) {
+  if (!coords.length) return null;
+  const i = Math.min(coords.length - 1, Math.max(0, Math.round((coords.length - 1) * f)));
+  return { lng: coords[i][0], lat: coords[i][1] };
+}
+
+export default function App() {
+  const [phase, setPhase] = useState("plan"); // plan | routes | active
+  const [mode, setMode] = useState("two_wheeler");
+  const [presetIdx, setPresetIdx] = useState(0);
+  const [origin, setOrigin] = useState(PRESETS[0].o);
+  const [destination, setDestination] = useState(PRESETS[0].d);
+  const [setting, setSetting] = useState(null); // 'origin' | 'destination'
+
+  const [plan, setPlan] = useState(null);
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+  const [trip, setTrip] = useState(null);
+
+  const [hazards, setHazards] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [harbors, setHarbors] = useState([]);
+  const [position, setPosition] = useState(null);
+  const [safetyScore, setSafetyScore] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [status, setStatus] = useState({ online: null, msg: "Checking backend…" });
+  const [busy, setBusy] = useState(false);
+  const [fitKey, setFitKey] = useState(0);
+  const seenAlerts = useRef(new Set());
+
+  // health check
+  useEffect(() => {
+    api
+      .config()
+      .then((c) =>
+        setStatus({ online: true, msg: `backend ok · gemini:${c.gemini_available ? "on" : "fallback"} · maps:${c.maps_key ? "on" : "fallback"}` })
+      )
+      .catch(() => setStatus({ online: false, msg: `no backend at ${api.base} — start agent-api` }));
+  }, []);
+
+  const selectedRoute =
+    plan?.routes?.find((r) => r.route_id === selectedRouteId) || plan?.routes?.[0];
+
+  const onMapClick = useCallback(
+    (ll) => {
+      if (setting === "origin") setOrigin(ll);
+      else if (setting === "destination") setDestination(ll);
+      setSetting(null);
+    },
+    [setting]
+  );
+
+  function applyPreset(i) {
+    setPresetIdx(i);
+    setOrigin(PRESETS[i].o);
+    setDestination(PRESETS[i].d);
+    setFitKey((k) => k + 1);
+  }
+
+  async function findRoute() {
+    if (!origin || !destination) return;
+    setBusy(true);
+    try {
+      const res = await api.createTrip({
+        uid: "web-demo",
+        origin,
+        destination,
+        mode,
+        origin_label: PRESETS[presetIdx]?.name || "Origin",
+        destination_label: "Destination",
+      });
+      setTrip(res.trip);
+      setPlan(res.plan);
+      setSelectedRouteId(res.plan.recommended_route_id);
+      setHazards(selectedHazards(res.plan, res.plan.recommended_route_id));
+      setPhase("routes");
+      setFitKey((k) => k + 1);
+    } catch (e) {
+      pushToast("Couldn't plan route", String(e.message || e), "#ff6150");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectedHazards(p, id) {
+    const r = p.routes.find((x) => x.route_id === id) || p.routes[0];
+    return r ? r.hazards : [];
+  }
+
+  async function startGuardian() {
+    if (!trip || !selectedRoute) return;
+    setBusy(true);
+    try {
+      await api.chooseRoute(trip.id, {
+        encoded_polyline: selectedRoute.encoded_polyline,
+        distance_m: selectedRoute.distance_m,
+        duration_s: selectedRoute.duration_s,
+      });
+      const t = await api.startTrip(trip.id);
+      setTrip(t);
+      setPosition(t.origin);
+      setAlerts([]);
+      setHarbors([]);
+      seenAlerts.current = new Set();
+      setPhase("active");
+      setFitKey((k) => k + 1);
+      refresh(t.id, true);
+    } catch (e) {
+      pushToast("Couldn't start", String(e.message || e), "#ff6150");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // active monitoring loop (client drives ticks locally; in cloud, Scheduler does this)
+  useEffect(() => {
+    if (phase !== "active" || !trip) return;
+    let alive = true;
+    const loop = async () => {
+      try {
+        await api.tick();
+        if (alive) await refresh(trip.id);
+      } catch {}
+    };
+    const iv = setInterval(loop, 6000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, [phase, trip]);
+
+  async function refresh(tripId, silent = false) {
+    try {
+      const [hz, al] = await Promise.all([api.hazards(tripId), api.alerts(tripId)]);
+      setHazards(hz.hazards || []);
+      if (hz.safety_score != null) setSafetyScore(hz.safety_score);
+      const list = al.alerts || [];
+      setAlerts(list);
+      if (!silent) {
+        for (const a of [...list].reverse()) {
+          if (!seenAlerts.current.has(a.id)) {
+            seenAlerts.current.add(a.id);
+            pushToast(a.title, a.message, ACTION_META[a.action]?.color || "#25c7dc");
+          }
+        }
+      } else {
+        list.forEach((a) => seenAlerts.current.add(a.id));
+      }
+    } catch {}
+  }
+
+  async function injectHazard(h) {
+    if (!trip) return;
+    try {
+      await api.forceHazard(trip.id, h.type, h.severity);
+      await api.tick();
+      await refresh(trip.id);
+    } catch (e) {
+      pushToast("Demo failed", String(e.message || e), "#ff6150");
+    }
+  }
+
+  async function advance(f) {
+    if (!trip) return;
+    const coords = decodePolyline(trip.encoded_polyline);
+    const p = pointAtFraction(coords, f);
+    if (!p) return;
+    setPosition(p);
+    try {
+      await api.setPosition(trip.id, p.lat, p.lng);
+    } catch {}
+  }
+
+  async function findHarbor() {
+    if (!position) return;
+    try {
+      const res = await api.safeHarbors(position.lat, position.lng);
+      setHarbors(res.harbors || []);
+      pushToast("Safe harbours nearby", `${res.harbors?.length || 0} refuge(s) marked on the map.`, "#f0b429");
+    } catch {}
+  }
+
+  async function arrived() {
+    if (trip) await api.complete(trip.id).catch(() => {});
+    setPhase("plan");
+    setTrip(null);
+    setPlan(null);
+    setHazards([]);
+    setAlerts([]);
+    setHarbors([]);
+    setPosition(null);
+    setSafetyScore(null);
+  }
+
+  function pushToast(title, msg, color) {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((t) => [...t, { id, title, msg, color }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
+  }
+
+  return (
+    <div className="app">
+      <div className="panel">
+        <div className="brand">
+          <span className="beacon"><span /></span>
+          <div style={{ flex: 1 }}>
+            <h1>SafeJourney</h1>
+            <span className="tag">agentic travel guardian</span>
+          </div>
+          {phase !== "plan" && (
+            <button className="btn btn-ghost" style={{ padding: "8px 12px" }} onClick={arrived}>
+              {phase === "active" ? "End" : "Back"}
+            </button>
+          )}
+        </div>
+
+        <div className="body">
+          {phase === "plan" && (
+            <PlanPanel
+              mode={mode}
+              setMode={setMode}
+              presetIdx={presetIdx}
+              applyPreset={applyPreset}
+              setting={setting}
+              setSetting={setSetting}
+              origin={origin}
+              destination={destination}
+              findRoute={findRoute}
+              busy={busy}
+              online={status.online}
+            />
+          )}
+
+          {phase === "routes" && plan && (
+            <RoutesPanel
+              plan={plan}
+              selectedRouteId={selectedRouteId}
+              onSelect={(id) => {
+                setSelectedRouteId(id);
+                setHazards(selectedHazards(plan, id));
+              }}
+              selectedRoute={selectedRoute}
+              startGuardian={startGuardian}
+              busy={busy}
+            />
+          )}
+
+          {phase === "active" && (
+            <ActivePanel
+              trip={trip}
+              alerts={alerts}
+              safetyScore={safetyScore}
+              injectHazard={injectHazard}
+              advance={advance}
+              findHarbor={findHarbor}
+            />
+          )}
+        </div>
+
+        <div className="status">
+          <span className={`dot ${status.online === true ? "live" : status.online === false ? "off" : ""}`} />
+          {status.msg}
+        </div>
+      </div>
+
+      <MapView
+        mapMode={phase === "active" ? "active" : "routes"}
+        routes={phase === "routes" ? plan?.routes || [] : []}
+        selectedRouteId={selectedRouteId}
+        activePolyline={phase === "active" ? trip?.encoded_polyline : null}
+        hazards={hazards}
+        harbors={harbors}
+        origin={phase !== "active" ? origin : trip?.origin}
+        destination={phase !== "active" ? destination : trip?.destination}
+        position={phase === "active" ? position : null}
+        onMapClick={setting ? onMapClick : null}
+        fitKey={fitKey}
+      />
+
+      <div className="toasts">
+        {toasts.map((t) => (
+          <div className="toast" key={t.id} style={{ borderLeftColor: t.color }}>
+            <div className="t-title">{t.title}</div>
+            <div className="t-msg">{t.msg}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- panels ---------------- */
+
+function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting, origin, destination, findRoute, busy, online }) {
+  return (
+    <>
+      <div className="hint">
+        Pick a journey and mode. SafeJourney checks every candidate route for floods,
+        lightning, live wires, road works and upstream calamity — then recommends the safest.
+      </div>
+
+      <div className="field">
+        <label>Demo journey</label>
+        <select value={presetIdx} onChange={(e) => applyPreset(Number(e.target.value))}>
+          {PRESETS.map((p, i) => (
+            <option value={i} key={i}>{p.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <span className="section-label">Or set points on the map</span>
+        <div className="btn-row" style={{ marginTop: 6 }}>
+          <button className={`btn ${setting === "origin" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSetting("origin")}>
+            {setting === "origin" ? "Tap map…" : "Set start (A)"}
+          </button>
+          <button className={`btn ${setting === "destination" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSetting("destination")}>
+            {setting === "destination" ? "Tap map…" : "Set end (B)"}
+          </button>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>Travel mode</label>
+        <div className="modes">
+          {MODES.map((m) => (
+            <button key={m.id} className={`mode ${mode === m.id ? "active" : ""}`} onClick={() => setMode(m.id)}>
+              <span className="ic">{m.ic}</span>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button className="btn btn-primary" onClick={findRoute} disabled={busy || online === false}>
+        {busy ? "Scanning routes…" : "Find the safest route"}
+      </button>
+      {online === false && (
+        <div className="hint" style={{ color: "#ffb3aa" }}>
+          Backend not reachable. Start it with <span className="mono">uvicorn main:app --port 8080</span>.
+        </div>
+      )}
+    </>
+  );
+}
+
+function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy }) {
+  return (
+    <>
+      <div className="hint">{plan.advice}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {plan.routes.map((r) => {
+          const color = RATING_COLOR[r.rating] || "#25c7dc";
+          const recommended = r.route_id === plan.recommended_route_id;
+          return (
+            <div
+              key={r.route_id}
+              className={`route-card ${r.route_id === selectedRouteId ? "selected" : ""}`}
+              onClick={() => onSelect(r.route_id)}
+            >
+              <div className="route-top">
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="score-badge" style={{ color }}>◍ {r.score}</span>
+                  {recommended && <span className="reco">recommended</span>}
+                </div>
+                <span className="rating" style={{ background: `${color}22`, color }}>{r.rating}</span>
+              </div>
+              <div className="route-meta">
+                <span>{fmtKm(r.distance_m)}</span>
+                <span>{fmtMin(r.duration_s)}</span>
+                <span>{r.hazards.length} hazard{r.hazards.length === 1 ? "" : "s"}</span>
+              </div>
+              <div className="route-summary">{r.summary}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {selectedRoute?.hazards?.length > 0 && (
+        <>
+          <div className="divider" />
+          <span className="section-label">Hazards on this route</span>
+          <div className="pills">
+            {selectedRoute.hazards.map((h, i) => (
+              <span className="pill" key={i}>
+                {HAZARD_ICON[h.type] || "❗"} {hazardLabel(h.type)}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+
+      {plan.precautions?.length > 0 && (
+        <>
+          <span className="section-label">Precautions</span>
+          <ul className="precautions">
+            {plan.precautions.map((p, i) => (
+              <li key={i}>{p}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <button className="btn btn-primary" onClick={startGuardian} disabled={busy}>
+        {busy ? "Starting…" : "Start Guardian on this route"}
+      </button>
+      <div className="hint">
+        Once started, SafeJourney watches the road ahead on an adaptive interval and alerts
+        you — even with the app closed (via push in the cloud build).
+      </div>
+    </>
+  );
+}
+
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor }) {
+  const rating =
+    safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
+  const color = rating ? RATING_COLOR[rating] : "#7d9490";
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span className="beacon"><span /></span>
+        <div>
+          <div style={{ fontWeight: 600 }}>Guardian is watching</div>
+          <div className="hint">Re-scanning the road ahead every few seconds.</div>
+        </div>
+        {safetyScore != null && (
+          <div style={{ marginLeft: "auto", textAlign: "right" }}>
+            <div className="section-label">road ahead</div>
+            <div className="score-badge" style={{ color, fontSize: 16 }}>◍ {safetyScore} · {rating}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="divider" />
+      <span className="section-label">Simulate a hazard (demo)</span>
+      <div className="pills">
+        {DEMO_HAZARDS.map((h) => (
+          <button key={h.type} className="pill" style={{ cursor: "pointer" }} onClick={() => injectHazard(h)}>
+            {HAZARD_ICON[h.type]} {h.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="btn-row">
+        <button className="btn btn-ghost" onClick={() => advance(0.4)}>Advance ↦</button>
+        <button className="btn btn-ghost" onClick={() => advance(0.8)}>Near end ↦</button>
+        <button className="btn btn-ghost" onClick={findHarbor}>Safe harbour</button>
+      </div>
+
+      <div className="divider" />
+      <span className="section-label">Alert feed</span>
+      {alerts.length === 0 && <div className="hint">No alerts yet — the road ahead is clear.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {alerts.map((a) => {
+          const meta = ACTION_META[a.action] || { label: a.action, color: "#25c7dc" };
+          return (
+            <div className="alert" key={a.id} style={{ borderLeftColor: meta.color }}>
+              <div className="a-top">
+                <span className="a-action" style={{ color: meta.color }}>{meta.label}</span>
+                <span className="a-time">{new Date(a.created_at * 1000).toLocaleTimeString()}</span>
+              </div>
+              <div className="a-title">{a.title}</div>
+              <div className="a-msg">{a.message}</div>
+              {a.precautions?.length > 0 && (
+                <ul className="precautions" style={{ marginTop: 4 }}>
+                  {a.precautions.slice(0, 3).map((p, i) => (
+                    <li key={i}>{p}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
