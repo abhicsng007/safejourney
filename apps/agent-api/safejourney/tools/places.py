@@ -45,6 +45,54 @@ def _fallback(lat: float, lng: float) -> list[dict]:
     ]
 
 
+_STATION_TYPES = {"subway_station", "train_station", "transit_station", "bus_station", "light_rail_station"}
+
+
+def _synthetic_station(lat: float, lng: float) -> dict:
+    """A station a short walk away so the transit flow demos offline / on empty results."""
+    slat, slng = lat + 0.004, lng + 0.0025
+    return {"name": "Nearest Metro", "type": "subway_station", "lat": slat, "lng": slng,
+            "distance_m": round(haversine_m(lat, lng, slat, slng)),
+            "label": "Metro station", "why": "Board here for the transit leg."}
+
+
+def nearest_station(lat: float, lng: float) -> dict | None:
+    """The closest boardable station to a point — the target of the home→station first leg."""
+    s = get_settings()
+    if not s.maps_api_key:
+        return _synthetic_station(lat, lng)
+    body = {
+        "includedTypes": list(_STATION_TYPES),
+        "maxResultCount": 1,
+        "locationRestriction": {
+            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": 2500.0}
+        },
+        "rankPreference": "DISTANCE",
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": s.maps_api_key,
+        "X-Goog-FieldMask": "places.displayName,places.location,places.primaryType",
+    }
+    data = post_json(_PLACES_NEARBY, json=body, headers=headers, timeout=8.0)
+    places = (data or {}).get("places", []) if isinstance(data, dict) else []
+    if not places:
+        return _synthetic_station(lat, lng)
+    p = places[0]
+    loc = p.get("location", {})
+    plat, plng = loc.get("latitude"), loc.get("longitude")
+    if plat is None:
+        return None
+    return {
+        "name": p.get("displayName", {}).get("text", "Station"),
+        "type": p.get("primaryType", "transit_station"),
+        "lat": plat, "lng": plng,
+        "distance_m": round(haversine_m(lat, lng, plat, plng)),
+        "label": _LABEL.get(p.get("primaryType", ""), "Station"),
+        "why": "Board here for the transit leg.",
+    }
+
+
 def find_safe_harbors(lat: float, lng: float, radius_m: int = 1200, limit: int = 4) -> list[dict]:
     s = get_settings()
     if not s.maps_api_key:

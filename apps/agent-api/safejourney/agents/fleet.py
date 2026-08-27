@@ -72,6 +72,7 @@ def build_guardian():
         plan_safe_routes,
         scan_route_hazards,
         get_safe_harbors,
+        get_mobility_options,
         check_trip_now,
         get_precautions,
         report_incident,
@@ -89,7 +90,8 @@ def build_guardian():
     safe_harbor = Agent(name="safe_harbor", model=model, description="Nearest safe refuge.",
                         instruction=SAFE_HARBOR_INSTRUCTION, tools=[get_safe_harbors])
     mobility = Agent(name="mobility", model=model, description="Transit/cab alternatives.",
-                     instruction=MOBILITY_INSTRUCTION, tools=[get_safe_harbors])
+                     instruction=MOBILITY_INSTRUCTION,
+                     tools=[get_mobility_options, get_safe_harbors])
     sos = Agent(name="sos", model=model, description="Danger guidance & escalation.",
                 instruction=SOS_INSTRUCTION, tools=[get_safe_harbors])
 
@@ -100,7 +102,7 @@ def build_guardian():
         instruction=CORE_INSTRUCTION,
         sub_agents=[prep, route_guardian, safe_harbor, mobility, sos],
         tools=[plan_safe_routes, scan_route_hazards, check_trip_now,
-               get_safe_harbors, get_precautions, report_incident],
+               get_safe_harbors, get_mobility_options, get_precautions, report_incident],
     )
     return guardian
 

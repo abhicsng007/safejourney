@@ -11,6 +11,7 @@ from safejourney_shared.scoring import ScoredRoute, rank_routes, route_is_blocki
 
 from ..tools.route import plan_routes
 from ..tools.hazard_scan import scan_corridor
+from ..tools.places import nearest_station
 from .precautions import precautions_for
 
 
@@ -73,6 +74,49 @@ def plan_and_score(
         ),
     }
     return result
+
+
+def first_mile_leg(
+    origin: tuple[float, float],
+    mode: str,
+    risk_tolerance: float = 1.0,
+) -> dict | None:
+    """The exposed walk from home to the nearest station (transit journeys only).
+
+    Returns a scored walk leg dict (station + hazards) so prep/monitoring can reason about
+    the first mile — 'walking to the metro in a storm' — or None when it doesn't apply.
+    """
+    if mode != "transit":
+        return None
+    station = nearest_station(origin[0], origin[1])
+    if not station:
+        return None
+    candidates = plan_routes(origin, (station["lat"], station["lng"]), "walk")
+    if not candidates:
+        return None
+    scored = score_route(candidates[0], "walk", risk_tolerance)
+    leg = scored.to_dict()
+    leg["station"] = station
+    leg["mode"] = "walk"
+    return leg
+
+
+def plan_journey(
+    origin: tuple[float, float],
+    dest: tuple[float, float],
+    mode: str = "two_wheeler",
+    risk_tolerance: float = 1.0,
+) -> dict:
+    """plan_and_score + the home→station first leg for transit journeys.
+
+    Kept separate from plan_and_score so the monitor's reroute path stays lean (no station
+    lookups on every tick) — only the planning entry points compose the full journey.
+    """
+    plan = plan_and_score(origin, dest, mode, risk_tolerance)
+    leg = first_mile_leg(origin, mode, risk_tolerance)
+    if leg:
+        plan["first_leg"] = leg
+    return plan
 
 
 def _plan_advice(ranked: list[ScoredRoute], all_blocking: bool) -> str:

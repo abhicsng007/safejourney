@@ -25,6 +25,7 @@ class HazardType(str, Enum):
     POTHOLE = "pothole"             # broken road, open manhole, pit
     UNLIT = "unlit"                 # unlit stretch at night
     BLACKSPOT = "blackspot"         # historical accident cluster
+    SHARP_TURN = "sharp_turn"       # hairpin / sharp bend (from route geometry)
     RAIL_CROSSING = "rail_crossing" # unmanned railway crossing
 
     # Incident (recently occurred on the path)
@@ -68,6 +69,7 @@ HAZARD_WEIGHTS: dict[HazardType, float] = {
     HazardType.POTHOLE: 1.0,
     HazardType.UNLIT: 0.8,
     HazardType.BLACKSPOT: 1.1,
+    HazardType.SHARP_TURN: 0.9,
     HazardType.RAIL_CROSSING: 1.2,
     HazardType.ELECTROCUTION: 1.9,
     HazardType.ACCIDENT: 1.2,

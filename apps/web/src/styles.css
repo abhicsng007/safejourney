@@ -510,3 +510,324 @@ input:focus {
   height: 12px;
   border-radius: 3px;
 }
+
+/* ---------- agent reasoning / provenance ---------- */
+.agent-note {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--beacon);
+  border-radius: 12px;
+  padding: 11px 13px;
+  background: linear-gradient(180deg, rgba(37, 199, 220, 0.08), rgba(37, 199, 220, 0.02));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.agent-note .a-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--beacon);
+  font-weight: 600;
+}
+.agent-note .a-body {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.provenance .pv-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.chip {
+  font-size: 10.5px;
+  font-family: "IBM Plex Mono", monospace;
+  padding: 3px 8px;
+  border-radius: 100px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  color: var(--ink-mid);
+}
+
+/* ---------- Guardian chat + tool-call trace ---------- */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.msg .bubble {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 9px 12px;
+  border-radius: 12px;
+  max-width: 92%;
+}
+.msg.user {
+  align-items: flex-end;
+}
+.msg.user .bubble {
+  background: var(--beacon-deep);
+  color: var(--ink);
+  border-bottom-right-radius: 3px;
+}
+.msg.agent .bubble {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 3px;
+  color: var(--ink);
+}
+.trace {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 0 2px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--line-strong);
+}
+.trace .step {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.trace .step .tk {
+  color: var(--beacon);
+}
+.trace .step .nm {
+  color: var(--ink-mid);
+}
+.chat-input {
+  display: flex;
+  gap: 7px;
+}
+.chat-input input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+}
+.chat-input input:focus {
+  outline: none;
+  border-color: var(--beacon);
+}
+.decided-by {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  padding: 1px 6px;
+}
+
+/* ---------- prep / readiness ---------- */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line-strong);
+  border-left-width: 4px;
+  border-radius: 14px;
+  padding: 13px 15px;
+  background: var(--surface-2);
+}
+.verdict .v-badge {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #06181a;
+  font-weight: 800;
+  font-size: 17px;
+}
+.verdict .v-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.verdict .v-headline {
+  font-size: 13.5px;
+  color: var(--ink);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+.prep-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.prep-count {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 10px 12px;
+  color: var(--ink);
+  transition: border-color 0.15s, background 0.15s;
+}
+.check-item:hover {
+  border-color: var(--line-strong);
+}
+.check-item.done {
+  background: rgba(51, 208, 140, 0.08);
+  border-color: rgba(51, 208, 140, 0.4);
+}
+.check-item .box {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--safe);
+  margin-top: 1px;
+}
+.check-item.done .box {
+  border-color: var(--safe);
+  background: rgba(51, 208, 140, 0.18);
+}
+.check-item .ci-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.check-item .ci-item {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.check-item.done .ci-item {
+  text-decoration: line-through;
+  color: var(--ink-mid);
+}
+.check-item .ci-reason {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+.gps-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 100px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  color: var(--ink-mid);
+}
+.gps-toggle .gps-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+.gps-toggle.on {
+  border-color: var(--safe);
+  color: var(--safe);
+}
+.gps-toggle.on .gps-dot {
+  background: var(--safe);
+  box-shadow: 0 0 0 4px rgba(51, 208, 140, 0.18);
+  animation: gpspulse 1.6s infinite;
+}
+@keyframes gpspulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* ---------- mobility alternatives ---------- */
+.mobility {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mob-opt {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  text-decoration: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 10px 12px;
+  color: var(--ink);
+  transition: border-color 0.15s, background 0.15s;
+}
+.mob-opt:hover {
+  border-color: var(--beacon);
+  background: var(--surface-3);
+}
+.mob-opt .mob-ic {
+  font-size: 18px;
+  flex: none;
+}
+.mob-opt .mob-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.mob-opt .mob-provider {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.mob-opt .mob-why {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+.mob-opt .mob-go {
+  color: var(--beacon);
+  font-size: 15px;
+}

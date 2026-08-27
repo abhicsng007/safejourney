@@ -21,6 +21,9 @@ from .weather import weather_hazards
 from .disaster import disaster_hazards
 from .roadwork import roadwork_hazards
 from .incident import incident_hazards
+from .geometry_hazards import sharp_turn_hazards
+from .lighting import unlit_hazards
+from .blackspot import blackspot_hazards
 
 _WET_TYPES = {HazardType.FLOOD, HazardType.STORM, HazardType.WATERLOGGING, HazardType.LIGHTNING}
 
@@ -59,15 +62,16 @@ def scan_corridor(
     sampled = [(lat, lng) for lat, lng, _ in sample_polyline(route_points, step_m=500.0)]
     geohashes = corridor_geohashes(route_points, precision=7, step_m=150.0)
 
-    # Run independent sources in parallel — the tick stays fast even with several feeds.
+    # Run independent network sources in parallel — the tick stays fast even with several feeds.
     hazards: list[Hazard] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         f_weather = pool.submit(weather_hazards, sampled)
         f_roadwork = pool.submit(roadwork_hazards, sampled) if include_roadwork else None
         f_incident = (
             pool.submit(incident_hazards, route_points, geohashes, max_offset_m)
             if include_incidents else None
         )
+        f_unlit = pool.submit(unlit_hazards, sampled) if include_roadwork else None
 
         weather = f_weather.result() or []
         hazards += weather
@@ -75,11 +79,17 @@ def scan_corridor(
             hazards += f_roadwork.result() or []
         if f_incident:
             hazards += f_incident.result() or []
+        if f_unlit:
+            hazards += f_unlit.result() or []
 
         # Disaster/GLOF reasoning depends on whether it's currently wet along the route.
         if include_disaster:
             raining = any(h.type in _WET_TYPES for h in weather)
             hazards += disaster_hazards(sampled, raining=raining) or []
+
+    # Local, no-network detectors — cheap, always on.
+    hazards += sharp_turn_hazards(route_points) or []
+    hazards += blackspot_hazards(route_points, max_offset_m) or []
 
     _annotate(hazards, route_points)
     # Drop hazards that turned out to be far from the actual line.

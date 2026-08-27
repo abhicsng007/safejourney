@@ -29,7 +29,7 @@ from ..config import get_settings
 from ..repo import get_repo
 from ..tools.hazard_scan import scan_corridor
 from ..tools.notify import send_push
-from .decision import decide
+from .agentic import agentic_decision
 from .planner import plan_and_score
 
 
@@ -114,9 +114,11 @@ def evaluate_trip(trip_id: str) -> dict:
         reroute_route = _try_reroute(trip)
         reroute_available = reroute_route is not None
 
-    decision = decide(new_hazards, trip, reroute_available) if new_hazards else None
+    decision = agentic_decision(new_hazards, trip, reroute_available) if new_hazards else None
 
     if decision:
+        reason = getattr(decision, "reason", "") or decision.__dict__.get("reason", "")
+        decided_by = "gemini" if get_settings().gemini_available else "rules"
         # Apply a reroute by switching the trip's path to the safer route.
         if decision.action == AlertAction.REROUTE and reroute_route:
             trip.encoded_polyline = reroute_route["encoded_polyline"]
@@ -134,7 +136,7 @@ def evaluate_trip(trip_id: str) -> dict:
             precautions=decision.precautions,
             hazard_types=decision.hazard_types,
             location=loc,
-            meta={"reroute": bool(reroute_route)},
+            meta={"reroute": bool(reroute_route), "reason": reason, "decided_by": decided_by},
         )
         repo.save_alert(alert)
         pushed = send_push(

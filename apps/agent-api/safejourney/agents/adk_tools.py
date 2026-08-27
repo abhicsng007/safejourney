@@ -16,6 +16,7 @@ from ..services import trips as trips_svc
 from ..services.monitor import evaluate_trip as _evaluate_trip
 from ..tools.hazard_scan import scan_corridor
 from ..tools.places import find_safe_harbors as _find_safe_harbors
+from ..tools.mobility import mobility_options as _mobility_options
 from ..services.precautions import precautions_for
 
 
@@ -64,6 +65,21 @@ def get_safe_harbors(lat: float, lng: float) -> dict:
     return {"harbors": _find_safe_harbors(lat, lng)}
 
 
+def get_mobility_options(lat: float, lng: float, dest_lat: float = 0.0, dest_lng: float = 0.0) -> dict:
+    """Find safer alternative ways to continue: cab (Uber/Ola) deep-links, public transit,
+    and the nearest station — for when the current route is blocked or unsafe.
+
+    Args:
+        lat: Current latitude.
+        lng: Current longitude.
+        dest_lat: Destination latitude (0 if unknown).
+        dest_lng: Destination longitude (0 if unknown).
+    """
+    dlat = dest_lat or None
+    dlng = dest_lng or None
+    return _mobility_options(lat, lng, dlat, dlng)
+
+
 def check_trip_now(trip_id: str) -> dict:
     """Run one live safety evaluation of an active trip's road ahead, right now.
 
@@ -107,6 +123,7 @@ ALL_TOOLS = [
     plan_safe_routes,
     scan_route_hazards,
     get_safe_harbors,
+    get_mobility_options,
     check_trip_now,
     get_precautions,
     report_incident,

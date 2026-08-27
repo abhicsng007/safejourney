@@ -18,10 +18,15 @@ from safejourney.services.monitor import evaluate_trip, dispatch
 def clean_repo(monkeypatch):
     # Fresh in-memory repo per test.
     monkeypatch.setattr(repo_mod, "_repo", repo_mod.InMemoryRepo())
-    # Make external feeds deterministic (no network in tests).
+    # Make external feeds deterministic (no network in tests). Each detector is stubbed to
+    # empty so these flow tests exercise only the injected-incident path; the detectors have
+    # their own unit tests in test_detectors.py.
     monkeypatch.setattr(hazard_scan, "weather_hazards", lambda pts: [])
     monkeypatch.setattr(hazard_scan, "disaster_hazards", lambda pts, raining=False: [])
     monkeypatch.setattr(hazard_scan, "roadwork_hazards", lambda pts, max_items=12: [])
+    monkeypatch.setattr(hazard_scan, "unlit_hazards", lambda pts: [])
+    monkeypatch.setattr(hazard_scan, "sharp_turn_hazards", lambda pts: [])
+    monkeypatch.setattr(hazard_scan, "blackspot_hazards", lambda pts, max_offset_m=200.0: [])
     yield
 
 

@@ -27,7 +27,12 @@ def _ensure_fcm():
 
 
 def send_push(token: str, title: str, body: str, data: dict | None = None) -> bool:
-    """Send a push to one device token. Returns True if actually delivered to FCM."""
+    """Send a push to one device token. Returns True if actually delivered to FCM.
+
+    A WebpushConfig is attached so the alert renders as a real OS notification on the web
+    even when the tab/app is closed — the flagship 'app-closed push' behaviour — and clicking
+    it deep-links back into the app at the alerting trip.
+    """
     s = get_settings()
     if not s.fcm_enabled or not token:
         print(f"[notify:log] {title} — {body}")
@@ -38,10 +43,22 @@ def send_push(token: str, title: str, body: str, data: dict | None = None) -> bo
     try:
         from firebase_admin import messaging
 
+        data_str = {k: str(v) for k, v in (data or {}).items()}
+        link = s.web_app_url.rstrip("/") + "/" if s.web_app_url else "/"
+        trip_id = data_str.get("tripId")
+        if trip_id and s.web_app_url:
+            link = f"{s.web_app_url.rstrip('/')}/?trip={trip_id}"
+
+        # Top-level notification + data; the web SW's onBackgroundMessage renders exactly one
+        # OS notification (avoiding the classic FCM web duplicate). fcm_options.link deep-links
+        # the click back into the app at the alerting trip.
         msg = messaging.Message(
             token=token,
             notification=messaging.Notification(title=title, body=body),
-            data={k: str(v) for k, v in (data or {}).items()},
+            data={**data_str, "title": title, "body": body},
+            webpush=messaging.WebpushConfig(
+                fcm_options=messaging.WebpushFCMOptions(link=link),
+            ),
         )
         messaging.send(msg)
         return True

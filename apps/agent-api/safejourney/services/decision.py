@@ -62,8 +62,13 @@ def decide(
     new_hazards: list[Hazard],
     trip: Trip,
     reroute_available: bool,
+    narrate: bool = True,
 ) -> Decision | None:
-    """Return a Decision, or None to stay silent (nothing new worth interrupting for)."""
+    """Return a Decision, or None to stay silent (nothing new worth interrupting for).
+
+    `narrate=False` skips the Gemini message rewrite — used when the agentic layer will make
+    its own LLM call, so we never pay for two Gemini round-trips per decision.
+    """
     if not new_hazards:
         return None
 
@@ -100,7 +105,8 @@ def decide(
         precautions=precs,
         hazard_types=htypes,
     )
-    _maybe_narrate(decision, trip, top)
+    if narrate:
+        _maybe_narrate(decision, trip, top)
     return decision
 
 

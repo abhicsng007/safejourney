@@ -31,6 +31,7 @@ _MODE_EXPOSURE: dict[str, dict[HazardType, float]] = {
         HazardType.WATERLOGGING: 1.4,
         HazardType.ACCIDENT: 1.3,
         HazardType.STORM: 1.3,
+        HazardType.SHARP_TURN: 1.4,
     },
     "car": {
         HazardType.FLOOD: 1.1,

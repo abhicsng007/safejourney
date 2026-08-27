@@ -41,6 +41,8 @@ class Settings:
 
     # --- FCM push ---
     fcm_enabled: bool = _b("FCM_ENABLED", False)
+    # Public URL of the web PWA — used to deep-link a push back into the app at the trip.
+    web_app_url: str = os.getenv("WEB_APP_URL", "")
 
     # --- Behaviour ---
     corridor_offset_m: float = float(os.getenv("CORRIDOR_OFFSET_M", "350"))

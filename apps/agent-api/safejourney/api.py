@@ -23,9 +23,12 @@ from safejourney_shared.geo import geohash_encode
 from .config import get_settings
 from .repo import get_repo
 from .services import trips as trips_svc
-from .services.planner import plan_and_score
+from .services.agentic import plan_reasoning
+from .services.planner import plan_and_score, plan_journey
+from .services.prep import readiness
 from .services.monitor import dispatch as monitor_dispatch, evaluate_trip
 from .tools.places import find_safe_harbors
+from .tools.mobility import mobility_options
 
 
 app = FastAPI(title="SafeJourney API", version="0.1.0")
@@ -43,6 +46,7 @@ class PlanReq(BaseModel):
     destination: LatLng
     mode: str = "two_wheeler"
     risk_tolerance: float = 1.0
+    agentic: bool = True
 
 
 class CreateTripReq(BaseModel):
@@ -52,6 +56,13 @@ class CreateTripReq(BaseModel):
     mode: str = "two_wheeler"
     origin_label: str = ""
     destination_label: str = ""
+    risk_tolerance: float = 1.0
+
+
+class PrepReq(BaseModel):
+    origin: LatLng
+    destination: LatLng
+    mode: str = "two_wheeler"
     risk_tolerance: float = 1.0
 
 
@@ -105,12 +116,29 @@ def config() -> dict:
 # ---------- planning ----------
 @app.post("/plan")
 def plan(req: PlanReq) -> dict:
-    return plan_and_score(
+    result = plan_and_score(
         (req.origin.lat, req.origin.lng),
         (req.destination.lat, req.destination.lng),
         req.mode,
         req.risk_tolerance,
     )
+    if req.agentic:
+        agent = plan_reasoning(result, req.mode)
+        if agent:
+            result["agent"] = agent
+    return result
+
+
+@app.post("/prep")
+def prep(req: PrepReq) -> dict:
+    """Pre-trip readiness: go/caution/wait + a hazard-grounded checklist, before leaving home."""
+    plan = plan_journey(
+        (req.origin.lat, req.origin.lng),
+        (req.destination.lat, req.destination.lng),
+        req.mode,
+        req.risk_tolerance,
+    )
+    return {"prep": readiness(plan, req.mode), "plan": plan}
 
 
 @app.get("/safe-harbors")
@@ -118,10 +146,16 @@ def safe_harbors(lat: float, lng: float) -> dict:
     return {"harbors": find_safe_harbors(lat, lng)}
 
 
+@app.get("/mobility")
+def mobility(lat: float, lng: float, dlat: float | None = None, dlng: float | None = None) -> dict:
+    """Alternative ways to continue safely: cab deep-links, transit, nearest station."""
+    return mobility_options(lat, lng, dlat, dlng)
+
+
 # ---------- trips ----------
 @app.post("/trips")
 def create_trip(req: CreateTripReq) -> dict:
-    return trips_svc.create_trip(
+    res = trips_svc.create_trip(
         uid=req.uid,
         origin=req.origin,
         destination=req.destination,
@@ -130,6 +164,11 @@ def create_trip(req: CreateTripReq) -> dict:
         destination_label=req.destination_label,
         risk_tolerance=req.risk_tolerance,
     )
+    agent = plan_reasoning(res.get("plan", {}), req.mode)
+    if agent:
+        res["plan"]["agent"] = agent
+    res["prep"] = readiness(res.get("plan", {}), req.mode)
+    return res
 
 
 @app.get("/trips")
@@ -260,10 +299,11 @@ def demo_force_hazard(req: ForceHazardReq) -> dict:
 @app.post("/agent/chat")
 def agent_chat(req: ChatReq) -> dict:
     try:
-        from .agents.fleet import run_guardian
+        from .services.agentic import run_agent_trace
 
-        reply = run_guardian(req.message, req.session_id, req.user_id)
-        return {"reply": reply, "agent": "guardian_core"}
+        return run_agent_trace(req.message, req.session_id, req.user_id)
     except RuntimeError as e:
         # ADK/Gemini not configured — return a clear, non-fatal message.
-        return {"reply": None, "error": str(e), "agent": "guardian_core"}
+        return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}
+    except Exception as e:  # pragma: no cover - keep the endpoint resilient for demos
+        return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}

@@ -8,6 +8,8 @@ PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 REGION="${REGION:-us-central1}"
 MAPS_KEY="${MAPS_KEY:-}"
 MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
+FCM_ENABLED="${FCM_ENABLED:-false}"   # set true once Firebase Cloud Messaging is configured
+WEB_APP_URL="${WEB_APP_URL:-}"        # deployed PWA URL, so a push click deep-links back
 REPO="safejourney"
 
 AR="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}"
@@ -16,7 +18,7 @@ echo "== Building images with Cloud Build =="
 gcloud builds submit --config cloudbuild.yaml \
   --substitutions "_REGION=${REGION},_REPO=${REPO}" .
 
-COMMON_ENV="GCP_PROJECT=${PROJECT_ID},GCP_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,USE_FIRESTORE=true,FIRESTORE_PROJECT=${PROJECT_ID},GEMINI_MODEL=${MODEL},FCM_ENABLED=false,GOOGLE_MAPS_API_KEY=${MAPS_KEY}"
+COMMON_ENV="GCP_PROJECT=${PROJECT_ID},GCP_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,USE_FIRESTORE=true,FIRESTORE_PROJECT=${PROJECT_ID},GEMINI_MODEL=${MODEL},FCM_ENABLED=${FCM_ENABLED},WEB_APP_URL=${WEB_APP_URL},GOOGLE_MAPS_API_KEY=${MAPS_KEY}"
 
 echo "== Deploying agent-api =="
 gcloud run deploy safejourney-api \

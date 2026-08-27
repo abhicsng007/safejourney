@@ -65,3 +65,94 @@ def narrate_alert(action: str, hazard: dict, mode: str, base_message: str) -> Op
         "Rewrite the message following your instructions."
     )
     return generate(prompt, system=_NARRATOR_SYSTEM, max_tokens=120)
+
+
+def generate_json(prompt: str, system: str = "", max_tokens: int = 400) -> Optional[dict]:
+    """Ask Gemini for a single JSON object and parse it. Returns None on any failure so
+    callers always fall back to deterministic logic."""
+    client = _client()
+    if client is None:
+        return None
+    s = get_settings()
+    try:
+        from google.genai import types
+
+        cfg = types.GenerateContentConfig(
+            system_instruction=system or None,
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+            response_mime_type="application/json",
+        )
+        resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
+        raw = (resp.text or "").strip()
+        if not raw:
+            return None
+        return _parse_json_object(raw)
+    except Exception as e:  # pragma: no cover
+        print(f"[llm] generate_json failed ({e})")
+        return None
+
+
+def _parse_json_object(raw: str) -> Optional[dict]:
+    import json
+
+    # Strip a ```json fence if the model added one despite the mime type.
+    t = raw.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:]
+    try:
+        val = json.loads(t)
+        return val if isinstance(val, dict) else None
+    except Exception:
+        # Last resort: grab the outermost {...}.
+        i, j = t.find("{"), t.rfind("}")
+        if 0 <= i < j:
+            try:
+                val = json.loads(t[i : j + 1])
+                return val if isinstance(val, dict) else None
+            except Exception:
+                return None
+        return None
+
+
+_DECISION_SYSTEM = (
+    "You are SafeJourney's Hazard Sentinel — the reasoning core that decides how to protect a "
+    "traveller in India when new hazards appear on the road ahead. You are given the ground-truth "
+    "hazards already detected by trusted sensors (weather, disaster feeds, road data, incident "
+    "reports) — never invent or deny a hazard, only reason about what to DO. "
+    "Choose exactly one action:\n"
+    "- advisory: a real hazard, but they can proceed carefully with precautions.\n"
+    "- harbor: not safe to continue now; divert to a nearby safe place and wait.\n"
+    "- reroute: a safer alternative path exists; switch to it (ONLY if reroute_available is true).\n"
+    "- sos: the traveller may be in immediate danger; prepare to alert contacts / emergency.\n"
+    "Weigh the traveller's exposure by mode (a walker or two-wheeler rider is far more exposed to "
+    "flood, lightning and live wires than someone in a car). Prefer the least-disruptive action "
+    "that keeps them safe. Reply with a JSON object: "
+    '{"action": "...", "title": "<=40 chars", "message": "1-2 warm, specific sentences leading '
+    'with what to do, <=240 chars", "reason": "one short clause on why this action"}.'
+)
+
+
+def decide_action_llm(
+    hazards: list[dict],
+    mode: str,
+    reroute_available: bool,
+    baseline_action: str,
+) -> Optional[dict]:
+    """Let Gemini choose the response action + compose the message, grounded on real hazards.
+    Returns a dict {action,title,message,reason} or None to fall back to the rule engine."""
+    lines = [
+        f"- {h.get('type')} (severity {h.get('severity')}): {h.get('description')}"
+        for h in hazards
+    ]
+    prompt = (
+        f"Traveller mode: {mode}\n"
+        f"reroute_available: {str(reroute_available).lower()}\n"
+        f"Rule-engine baseline action (safe floor): {baseline_action}\n"
+        "New hazards on the road ahead:\n" + "\n".join(lines) + "\n\n"
+        "Decide the single best action and write the alert. Do not choose reroute unless "
+        "reroute_available is true. Return only the JSON object."
+    )
+    return generate_json(prompt, system=_DECISION_SYSTEM, max_tokens=300)

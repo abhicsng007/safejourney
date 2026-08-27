@@ -65,6 +65,11 @@ PRECAUTIONS: dict[HazardType, list[str]] = {
         "Accident-prone stretch — cut speed, no overtaking.",
         "Anticipate sudden merges and pedestrians.",
     ],
+    HazardType.SHARP_TURN: [
+        "Sharp bend ahead — slow before the turn, not in it.",
+        "Stay in your lane; oncoming traffic can cut the corner.",
+        "Sound your horn on blind hairpins in the hills.",
+    ],
     HazardType.RAIL_CROSSING: [
         "Unmanned crossing — stop, look both ways, cross only when clearly safe.",
     ],

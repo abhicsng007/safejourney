@@ -18,7 +18,7 @@ from safejourney_shared.models import (
 
 from ..config import get_settings
 from ..repo import get_repo
-from .planner import plan_and_score
+from .planner import plan_and_score, plan_journey
 
 
 def create_trip(
@@ -30,8 +30,9 @@ def create_trip(
     destination_label: str = "",
     risk_tolerance: float = 1.0,
 ) -> dict:
-    """Plan + score routes, create the trip on the recommended (safest) route."""
-    plan = plan_and_score(
+    """Plan + score routes (incl. the home→station first leg), create the trip on the
+    recommended (safest) route."""
+    plan = plan_journey(
         (origin.lat, origin.lng), (destination.lat, destination.lng), mode, risk_tolerance
     )
     routes = plan["routes"]

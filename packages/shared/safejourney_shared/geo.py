@@ -22,6 +22,21 @@ def haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * _EARTH_R * math.asin(min(1.0, math.sqrt(a)))
 
 
+def bearing_deg(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Initial compass bearing from point 1 to point 2, in degrees [0, 360)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lng2 - lng1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def angle_diff_deg(a: float, b: float) -> float:
+    """Smallest absolute difference between two bearings, in [0, 180]."""
+    d = abs(a - b) % 360.0
+    return d if d <= 180.0 else 360.0 - d
+
+
 def decode_polyline(encoded: str) -> list[tuple[float, float]]:
     """Decode a Google/Mapbox encoded polyline into [(lat, lng), ...].
 

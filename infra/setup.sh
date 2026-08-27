@@ -20,6 +20,8 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   cloudresourcemanager.googleapis.com \
   secretmanager.googleapis.com \
+  firebasecloudmessaging.googleapis.com \
+  fcm.googleapis.com \
   maps-backend.googleapis.com \
   routes.googleapis.com \
   places-backend.googleapis.com
