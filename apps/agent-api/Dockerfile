@@ -19,5 +19,6 @@ RUN grep -v "safejourney-shared" requirements.txt > reqs.txt && pip install -r r
 
 COPY apps/agent-api /app
 
+# Cloud Run injects PORT (defaults to 8080). Honor it via shell expansion.
 ENV PORT=8080
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/bin/sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]

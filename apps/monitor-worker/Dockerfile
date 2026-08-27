@@ -20,5 +20,7 @@ COPY apps/monitor-worker/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 COPY apps/monitor-worker /app
 
-ENV PORT=8081
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8081"]
+# Cloud Run injects PORT (defaults to 8080). Honor it via shell expansion so the container
+# always listens where Cloud Run sends traffic.
+ENV PORT=8080
+CMD ["/bin/sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
