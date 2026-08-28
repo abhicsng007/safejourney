@@ -31,6 +31,25 @@ _SYSTEM = (
 
 _MAX = 5
 _MAX_SNAP_M = 6000.0  # drop advisories whose geocoded locality is far from the route
+_RECENCY_DAYS = 35    # only surface conditions reported within roughly the last month
+
+
+def _is_stale(date_str: str, today, days: int = _RECENCY_DAYS) -> bool:
+    """True if a model-provided report date is clearly older than the recency window.
+
+    Lenient: only rejects a date we can actually parse and that is definitively too old, so a
+    missing/odd date never drops a real advisory (the prompt is the primary recency guard).
+    """
+    import datetime as _dt
+
+    s = (date_str or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%Y-%m", "%Y/%m/%d", "%Y/%m"):
+        try:
+            d = _dt.datetime.strptime(s, fmt).date()
+            return d < today - _dt.timedelta(days=days)
+        except ValueError:
+            continue
+    return False  # unparseable/blank — keep it, trust the prompt
 
 
 def route_web_advisories(origin_label: str, dest_label: str, encoded_polyline: str) -> list[dict]:
@@ -56,6 +75,7 @@ def route_web_advisories_debug(
         "kept": 0,
         "dropped_no_geocode": 0,
         "dropped_too_far": 0,
+        "dropped_stale": 0,
         "error": None,
     }
     if not s.gemini_available or not pts:
@@ -67,11 +87,20 @@ def route_web_advisories_debug(
 
     from ..agents.llm import generate_with_search, parse_json_array
 
+    import datetime as _dt
+
+    today = _dt.date.today()
+    cutoff = today - _dt.timedelta(days=_RECENCY_DAYS)
     prompt = (
-        f"Research current, real road conditions on or near the route from "
-        f"'{origin_label}' to '{dest_label}' in India using live web search. Include hazards that "
-        f"are ONGOING or widely reported locally — not only ones with a recent news article. Look "
-        f"for: road works / digging / sewer or utility line laying, torn-up or broken roads, "
+        f"Today's date is {today.isoformat()}. Research CURRENT, real road conditions on or near "
+        f"the route from '{origin_label}' to '{dest_label}' in India using live web search. "
+        f"Report ONLY conditions that are active right now and were reported, updated or confirmed "
+        f"within the last {_RECENCY_DAYS} days (on or after {cutoff.isoformat()}). Do NOT include "
+        f"older incidents, road works that have since finished, or reports from earlier months or "
+        f"previous years — if the most recent evidence you can find for an item is older than that, "
+        f"leave it out. Prefer the most recently reported items and search with recency in mind "
+        f"(e.g. include the current month and year in your queries).\n\n"
+        f"Look for: road works / digging / sewer or utility line laying, torn-up or broken roads, "
         f"potholes, road closures or diversions, waterlogging or flooding, poor drainage, major "
         f"accidents, or stretches locally considered unsafe. Consider news, civic/municipal "
         f"notices, local forums, resident complaints and map reviews.\n\n"
@@ -79,8 +108,10 @@ def route_web_advisories_debug(
         '{"type": one of ["roadwork","pothole","waterlogging","flood","accident","unsafe_area","other"], '
         '"locality": "<specific road/landmark/area on the route>", '
         '"summary": "<one factual sentence: what and where>", '
+        '"date": "<when this was reported/confirmed, YYYY-MM-DD or YYYY-MM; the most recent date you can confirm>", '
         '"source": "<where you saw it: publication, forum, municipal notice, or map reviews>"}\n'
-        "Only include items your search results actually support. If nothing credible, return []."
+        f"Only include items your search results actually support AND that are from the last "
+        f"{_RECENCY_DAYS} days. If nothing credible and recent, return []."
     )
     try:
         text = generate_with_search(prompt, system=_SYSTEM)
@@ -115,6 +146,11 @@ def route_web_advisories_debug(
         summary = (it.get("summary") or "").strip()
         if not loc or not summary:
             continue
+        report_date = (it.get("date") or "").strip()
+        # Safety net beyond the prompt: drop items the model dated clearly outside the window.
+        if _is_stale(report_date, today):
+            diag["dropped_stale"] += 1
+            continue
         # Resolve to the candidate nearest the route (handles same-named places elsewhere).
         snapped = _resolve(loc, pts, center, region_hints, geocode_search, geocode_resolve)
         if not snapped:
@@ -131,6 +167,7 @@ def route_web_advisories_debug(
             "lng": snapped[1],
             "locality": loc,
             "summary": summary,
+            "date": report_date,
             "source": it.get("source") or "web",
         })
     diag["kept"] = len(out)

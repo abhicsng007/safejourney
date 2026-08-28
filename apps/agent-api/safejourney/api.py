@@ -205,6 +205,7 @@ def web_advisories(req: WebAdvisoryReq) -> dict:
         f"pts={d.get('route_points')} raw_len={d.get('raw_len')} "
         f"parsed={d.get('parsed_count')} kept={d.get('kept')} "
         f"no_geocode={d.get('dropped_no_geocode')} too_far={d.get('dropped_too_far')} "
+        f"stale={d.get('dropped_stale')} "
         f"error={d.get('error')} raw_preview={d.get('raw_preview')!r}",
         flush=True,
     )
