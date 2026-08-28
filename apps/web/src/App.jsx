@@ -274,20 +274,22 @@ export default function App() {
     };
   }, [phase, trip]);
 
-  // Proximity alert: warn the moment the traveller comes within ~300 m of a known hazard.
+  // Proximity alert: warn ~350 m BEFORE the traveller reaches a known hazard, so the notice
+  // lands ahead of the point, not after crossing it. Checked on every position update (each
+  // animation frame during the simulated drive), so no hazard is skipped.
   useEffect(() => {
     if (phase !== "active" || !position || !hazards.length) return;
     for (const h of hazards) {
       const key = `${h.type}:${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`;
       const d = haversineM(position.lat, position.lng, h.lat, h.lng);
-      if (d <= 300 && !warnedProx.current.has(key)) {
+      if (d <= 350 && !warnedProx.current.has(key)) {
         warnedProx.current.add(key);
         pushToast(
-          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} ~${Math.round(d)} m`,
-          h.description || "Approaching a hazard — stay alert.",
+          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} · ${Math.round(d)} m ahead`,
+          h.description || "Approaching a hazard — slow down and stay alert.",
           "#ff8a3d"
         );
-      } else if (d > 500 && warnedProx.current.has(key)) {
+      } else if (d > 550 && warnedProx.current.has(key)) {
         warnedProx.current.delete(key); // re-arm once well past, so a loop back re-warns
       }
     }
@@ -359,10 +361,9 @@ export default function App() {
     } catch {}
   }
 
-  // Judge demo: glide a traveller along the whole route over ~1 minute, streaming its
-  // position so the live guardian flow (road-ahead scans, proximity warnings, arrival)
-  // plays out on its own — no real travel needed.
-  const SIM_DURATION_MS = 60000;
+  // Judge demo: glide a traveller along the route at a realistic pace (~1 km per minute),
+  // streaming its position so the live guardian flow (road-ahead scans, proximity warnings,
+  // arrival) plays out on its own — no real travel needed.
   function stopSim() {
     if (simRef.current) cancelAnimationFrame(simRef.current);
     simRef.current = null;
@@ -379,13 +380,16 @@ export default function App() {
       cum.push(cum[i - 1] + haversineM(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]));
     }
     const total = cum[cum.length - 1] || 1;
+    // Realistic pace: ~1 km per minute (~60 km/h), clamped so a tiny route still lasts long
+    // enough to see and a long one doesn't drag. This keeps hazard warnings well-timed.
+    const durationMs = Math.min(150000, Math.max(20000, (total / 1000) * 60000));
     setSimulating(true);
     setGpsOn(false);              // simulated position overrides any live GPS
     warnedProx.current = new Set(); // re-arm proximity warnings for the run
     const start = performance.now();
     let lastPush = 0;
     const step = (now) => {
-      const t = Math.min(1, (now - start) / SIM_DURATION_MS);
+      const t = Math.min(1, (now - start) / durationMs);
       const d = t * total;
       let i = 1;
       while (i < cum.length && cum[i] < d) i++;

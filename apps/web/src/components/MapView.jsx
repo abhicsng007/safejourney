@@ -19,6 +19,17 @@ const OSM_STYLE = {
   ],
 };
 
+// Compass bearing (deg) from point a to b, each [lng, lat].
+function bearingDeg(a, b) {
+  const toR = Math.PI / 180, toD = 180 / Math.PI;
+  const dLng = (b[0] - a[0]) * toR;
+  const y = Math.sin(dLng) * Math.cos(b[1] * toR);
+  const x =
+    Math.cos(a[1] * toR) * Math.sin(b[1] * toR) -
+    Math.sin(a[1] * toR) * Math.cos(b[1] * toR) * Math.cos(dLng);
+  return (Math.atan2(y, x) * toD + 360) % 360;
+}
+
 const TRAVELER_ICON = { walk: "🚶", two_wheeler: "🏍️", car: "🚗", transit: "🚌" };
 function travelerEl(mode) {
   const el = document.createElement("div");
@@ -245,6 +256,21 @@ export default function MapView({
   // above so a per-frame position change doesn't rebuild every other marker.
   const travelerRef = useRef(null);
   const travelerModeRef = useRef(null);
+  const prevLngLatRef = useRef(null);
+  const bearingRef = useRef(0);
+  const NAV_ZOOM = 16.2;
+  const NAV_PITCH = 60;
+
+  // Leave the tilted "navigation" camera when the drive stops.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || followTraveler) return;
+    prevLngLatRef.current = null;
+    const apply = () => map.easeTo({ pitch: 0, bearing: 0, duration: 700, essential: true });
+    if (map._sjReady) apply();
+    else map.once("sjready", apply);
+  }, [followTraveler]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -262,7 +288,19 @@ export default function MapView({
       } else {
         travelerRef.current.setLngLat([position.lng, position.lat]);
       }
-      if (followTraveler) map.easeTo({ center: [position.lng, position.lat], duration: 260, essential: true });
+      if (followTraveler) {
+        // Google-Maps-style nav camera: zoomed in, tilted, rotated to the heading so the
+        // road ahead runs "up" the screen and the traveller leads.
+        const cur = [position.lng, position.lat];
+        const prev = prevLngLatRef.current;
+        if (prev && (prev[0] !== cur[0] || prev[1] !== cur[1])) {
+          const b = bearingDeg(prev, cur);
+          const delta = ((b - bearingRef.current + 540) % 360) - 180; // shortest turn
+          bearingRef.current = (bearingRef.current + delta * 0.3 + 360) % 360; // smoothed
+        }
+        prevLngLatRef.current = cur;
+        map.jumpTo({ center: cur, bearing: bearingRef.current, zoom: NAV_ZOOM, pitch: NAV_PITCH });
+      }
     };
     if (map._sjReady) apply();
     else map.once("sjready", apply);
