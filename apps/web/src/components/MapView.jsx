@@ -35,6 +35,7 @@ export default function MapView({
   activePolyline,
   hazards = [],
   harbors = [],
+  essentials = [],
   origin,
   destination,
   position,
@@ -96,9 +97,10 @@ export default function MapView({
       });
       map.on("click", "hazards-dot", (e) => {
         const p = e.features[0].properties;
+        const dist = p.dist ? `<br/><span style="opacity:.7">📍 ${p.dist}</span>` : "";
         new maplibregl.Popup({ offset: 12 })
           .setLngLat(e.lngLat)
-          .setHTML(`<b>${p.icon || "❗"} ${p.label}</b><br/>${p.desc || ""}`)
+          .setHTML(`<b>${p.icon || "❗"} ${p.label}</b>${dist}<br/>${p.desc || ""}`)
           .addTo(map);
       });
       map.on("mouseenter", "hazards-dot", () => (map.getCanvas().style.cursor = "pointer"));
@@ -149,6 +151,7 @@ export default function MapView({
           label: `${hazardLabel(h.type)} (${h.severity})`,
           desc: h.description || "",
           icon: HAZARD_ICON[h.type] || "❗",
+          dist: h.distance_along_m != null ? fmtDist(h.distance_along_m) + " along route" : "",
         },
       }));
       const src = map.getSource("hazards");
@@ -171,8 +174,20 @@ export default function MapView({
     if (origin) add([origin.lng, origin.lat], marker("#33d08c", "A"));
     if (destination) add([destination.lng, destination.lat], marker("#25c7dc", "B"));
     if (position) add([position.lng, position.lat], marker("#ffffff", "●", 20));
-    harbors.forEach((h) => add([h.lng, h.lat], marker("#f0b429", "🏠", 24)));
-  }, [origin, destination, position, harbors]);
+    harbors.forEach((h) => addLabeled([h.lng, h.lat], marker("#f0b429", "🛟", 24), h.name || h.label, h.why));
+    essentials.forEach((e) => addLabeled([e.lng, e.lat], marker("#8ad6ff", e.icon || "🛒", 22), e.name || e.label, e.why));
+
+    function addLabeled(lngLat, el, title, why) {
+      el.style.cursor = "pointer";
+      const m = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        new maplibregl.Popup({ offset: 14 }).setLngLat(lngLat)
+          .setHTML(`<b>${title || ""}</b>${why ? `<br/>${why}` : ""}`).addTo(map);
+      });
+      markersRef.current.push(m);
+    }
+  }, [origin, destination, position, harbors, essentials]);
 
   // fly to a just-picked location (search result / GPS) for a responsive "search" feel
   useEffect(() => {
@@ -216,6 +231,9 @@ export default function MapView({
   );
 }
 
+function fmtDist(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
 function fc(features) {
   return { type: "FeatureCollection", features };
 }

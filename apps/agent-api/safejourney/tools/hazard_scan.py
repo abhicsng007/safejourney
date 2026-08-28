@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from safejourney_shared.geo import (
     corridor_geohashes,
+    distance_along_polyline_m,
     point_near_polyline_m,
     sample_polyline,
 )
@@ -29,10 +30,13 @@ _WET_TYPES = {HazardType.FLOOD, HazardType.STORM, HazardType.WATERLOGGING, Hazar
 
 
 def _annotate(hazards: list[Hazard], route_pts: list[tuple[float, float]]) -> None:
-    """Fill offset_m (distance from route line) so scoring can weight by exposure."""
+    """Fill offset_m (distance from route line, for exposure weighting) and distance_along_m
+    (metres from the start of the given corridor — i.e. how far ahead the hazard is)."""
     for h in hazards:
         if h.offset_m is None:
             h.offset_m = point_near_polyline_m(h.lat, h.lng, route_pts)
+        if h.distance_along_m is None:
+            h.distance_along_m = distance_along_polyline_m(h.lat, h.lng, route_pts)
 
 
 def _dedupe(hazards: list[Hazard]) -> list[Hazard]:

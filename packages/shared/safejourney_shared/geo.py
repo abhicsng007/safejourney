@@ -130,6 +130,49 @@ def point_near_polyline_m(
     return best
 
 
+def distance_along_polyline_m(
+    lat: float, lng: float, points: list[tuple[float, float]]
+) -> float:
+    """How far along the route (metres from its start) the point projects to.
+
+    Finds the segment the point is closest to, then returns the cumulative length up to that
+    segment plus the projected distance onto it. Used to tell the traveller a hazard is
+    'X metres ahead'.
+    """
+    if not points or len(points) < 2:
+        return 0.0
+    best_d = float("inf")
+    best_along = 0.0
+    cum = 0.0
+    for (alat, alng), (blat, blng) in zip(points, points[1:]):
+        seg_len = haversine_m(alat, alng, blat, blng)
+        d, t = _point_seg_dist_and_t(lat, lng, alat, alng, blat, blng)
+        if d < best_d:
+            best_d = d
+            best_along = cum + t * seg_len
+        cum += seg_len
+    return best_along
+
+
+def _point_seg_dist_and_t(
+    plat: float, plng: float, alat: float, alng: float, blat: float, blng: float
+) -> tuple[float, float]:
+    """Distance from P to segment AB and the clamped projection parameter t in [0, 1]."""
+    lat0 = math.radians((alat + blat) / 2)
+    mx = math.cos(lat0) * (math.pi / 180) * _EARTH_R
+    my = (math.pi / 180) * _EARTH_R
+    ax, ay = alng * mx, alat * my
+    bx, by = blng * mx, blat * my
+    px, py = plng * mx, plat * my
+    dx, dy = bx - ax, by - ay
+    seg2 = dx * dx + dy * dy
+    if seg2 == 0:
+        return math.hypot(px - ax, py - ay), 0.0
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg2))
+    cx, cy = ax + t * dx, ay + t * dy
+    return math.hypot(px - cx, py - cy), t
+
+
 def _point_seg_dist_m(
     plat: float, plng: float, alat: float, alng: float, blat: float, blng: float
 ) -> float:

@@ -27,7 +27,7 @@ from .services.agentic import plan_reasoning
 from .services.planner import plan_and_score, plan_journey
 from .services.prep import readiness
 from .services.monitor import dispatch as monitor_dispatch, evaluate_trip
-from .tools.places import find_safe_harbors
+from .tools.places import find_safe_harbors, find_essentials
 from .tools.mobility import mobility_options
 from .tools.geocode import geocode_search, geocode_resolve, reverse_geocode
 
@@ -173,6 +173,12 @@ def safe_harbors(lat: float, lng: float) -> dict:
 def mobility(lat: float, lng: float, dlat: float | None = None, dlng: float | None = None) -> dict:
     """Alternative ways to continue safely: cab deep-links, transit, nearest station."""
     return mobility_options(lat, lng, dlat, dlng)
+
+
+@app.get("/essentials")
+def essentials(lat: float, lng: float) -> dict:
+    """Nearby places to grab journey essentials — pharmacy, fuel, ATM, water/snacks."""
+    return {"essentials": find_essentials(lat, lng)}
 
 
 # ---------- trips ----------

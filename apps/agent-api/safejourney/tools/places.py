@@ -93,6 +93,71 @@ def nearest_station(lat: float, lng: float) -> dict | None:
     }
 
 
+# Essential-supply stops for a journey (before or mid-trip).
+_ESSENTIAL_TYPES = ["pharmacy", "gas_station", "atm", "convenience_store", "supermarket"]
+_ESSENTIAL_LABEL = {
+    "pharmacy": ("Pharmacy", "💊", "Medicines, first-aid, water."),
+    "gas_station": ("Fuel / charge", "⛽", "Fuel, air, restroom, snacks."),
+    "atm": ("ATM", "🏧", "Cash for cabs/tolls."),
+    "convenience_store": ("Store", "🛒", "Water, snacks, rain cover."),
+    "supermarket": ("Supermarket", "🛒", "Supplies for the journey."),
+}
+
+
+def _essentials_fallback(lat: float, lng: float) -> list[dict]:
+    seed = [
+        ("pharmacy", 0.002, -0.001),
+        ("gas_station", -0.003, 0.002),
+        ("convenience_store", 0.001, 0.003),
+        ("atm", 0.0015, -0.0025),
+    ]
+    out = []
+    for t, dlat, dlng in seed:
+        label, icon, why = _ESSENTIAL_LABEL[t]
+        out.append({"name": label, "type": t, "lat": lat + dlat, "lng": lng + dlng,
+                    "distance_m": round(haversine_m(lat, lng, lat + dlat, lng + dlng)),
+                    "label": label, "icon": icon, "why": why})
+    return out
+
+
+def find_essentials(lat: float, lng: float, radius_m: int = 1500, limit: int = 6) -> list[dict]:
+    """Nearby places to pick up journey essentials — pharmacy, fuel, ATM, water/snacks."""
+    s = get_settings()
+    if not s.maps_api_key:
+        return _essentials_fallback(lat, lng)[:limit]
+    body = {
+        "includedTypes": _ESSENTIAL_TYPES,
+        "maxResultCount": limit,
+        "locationRestriction": {
+            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(radius_m)}
+        },
+        "rankPreference": "DISTANCE",
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": s.maps_api_key,
+        "X-Goog-FieldMask": "places.displayName,places.location,places.primaryType",
+    }
+    data = post_json(_PLACES_NEARBY, json=body, headers=headers, timeout=8.0)
+    places = (data or {}).get("places", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for p in places:
+        loc = p.get("location", {})
+        plat, plng = loc.get("latitude"), loc.get("longitude")
+        if plat is None:
+            continue
+        ptype = p.get("primaryType", "")
+        label, icon, why = _ESSENTIAL_LABEL.get(ptype, ("Shop", "🛒", "Supplies."))
+        out.append({
+            "name": p.get("displayName", {}).get("text", label),
+            "type": ptype, "lat": plat, "lng": plng,
+            "distance_m": round(haversine_m(lat, lng, plat, plng)),
+            "label": label, "icon": icon, "why": why,
+        })
+    out.sort(key=lambda x: x["distance_m"])
+    return out[:limit] or _essentials_fallback(lat, lng)[:limit]
+
+
 def find_safe_harbors(lat: float, lng: float, radius_m: int = 1200, limit: int = 4) -> list[dict]:
     s = get_settings()
     if not s.maps_api_key:

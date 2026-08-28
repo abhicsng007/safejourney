@@ -36,6 +36,18 @@ function pointAtFraction(coords, f) {
   const i = Math.min(coords.length - 1, Math.max(0, Math.round((coords.length - 1) * f)));
   return { lng: coords[i][0], lat: coords[i][1] };
 }
+function haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toR = Math.PI / 180;
+  const dphi = (lat2 - lat1) * toR, dl = (lng2 - lng1) * toR;
+  const a =
+    Math.sin(dphi / 2) ** 2 +
+    Math.cos(lat1 * toR) * Math.cos(lat2 * toR) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function fmtAhead(m) {
+  if (m == null) return "";
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
 
 export default function App() {
   const [phase, setPhase] = useState("plan"); // plan | routes | active
@@ -56,6 +68,7 @@ export default function App() {
   const [hazards, setHazards] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [harbors, setHarbors] = useState([]);
+  const [essentials, setEssentials] = useState([]);
   const [mobility, setMobility] = useState(null);
   const [position, setPosition] = useState(null);
   const [safetyScore, setSafetyScore] = useState(null);
@@ -65,6 +78,7 @@ export default function App() {
   const [fitKey, setFitKey] = useState(0);
   const [focusPoint, setFocusPoint] = useState(null);
   const seenAlerts = useRef(new Set());
+  const warnedProx = useRef(new Set());
 
   // health check
   useEffect(() => {
@@ -217,6 +231,25 @@ export default function App() {
     };
   }, [phase, trip]);
 
+  // Proximity alert: warn the moment the traveller comes within ~300 m of a known hazard.
+  useEffect(() => {
+    if (phase !== "active" || !position || !hazards.length) return;
+    for (const h of hazards) {
+      const key = `${h.type}:${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`;
+      const d = haversineM(position.lat, position.lng, h.lat, h.lng);
+      if (d <= 300 && !warnedProx.current.has(key)) {
+        warnedProx.current.add(key);
+        pushToast(
+          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} ~${Math.round(d)} m`,
+          h.description || "Approaching a hazard — stay alert.",
+          "#ff8a3d"
+        );
+      } else if (d > 500 && warnedProx.current.has(key)) {
+        warnedProx.current.delete(key); // re-arm once well past, so a loop back re-warns
+      }
+    }
+  }, [position, hazards, phase]);
+
   // Real GPS: stream the device location to the backend so monitoring watches the road
   // actually ahead of the traveller. Falls back to the simulate buttons when off/denied.
   useEffect(() => {
@@ -302,6 +335,16 @@ export default function App() {
     } catch {}
   }
 
+  async function findEssentials() {
+    const p = position || origin;
+    if (!p) return;
+    try {
+      const res = await api.essentials(p.lat, p.lng);
+      setEssentials(res.essentials || []);
+      pushToast("Essentials nearby", `${res.essentials?.length || 0} place(s) marked on the map.`, "#8ad6ff");
+    } catch {}
+  }
+
   async function arrived() {
     if (trip) await api.complete(trip.id).catch(() => {});
     setPhase("plan");
@@ -312,6 +355,7 @@ export default function App() {
     setHazards([]);
     setAlerts([]);
     setHarbors([]);
+    setEssentials([]);
     setMobility(null);
     setPosition(null);
     setSafetyScore(null);
@@ -395,6 +439,8 @@ export default function App() {
               advance={advance}
               findHarbor={findHarbor}
               findMobility={findMobility}
+              findEssentials={findEssentials}
+              essentials={essentials}
               mobility={mobility}
               gpsOn={gpsOn}
               toggleGps={() => setGpsOn((v) => !v)}
@@ -415,6 +461,7 @@ export default function App() {
         activePolyline={phase === "active" ? trip?.encoded_polyline : null}
         hazards={hazards}
         harbors={harbors}
+        essentials={essentials}
         origin={phase !== "active" ? origin : trip?.origin}
         destination={phase !== "active" ? destination : trip?.destination}
         position={phase === "active" ? position : null}
@@ -739,11 +786,16 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
           <div className="divider" />
           <span className="section-label">Hazards on this route</span>
           <div className="pills">
-            {selectedRoute.hazards.map((h, i) => (
-              <span className="pill" key={i}>
-                {HAZARD_ICON[h.type] || "❗"} {hazardLabel(h.type)}
-              </span>
-            ))}
+            {[...selectedRoute.hazards]
+              .sort((a, b) => (a.distance_along_m ?? 0) - (b.distance_along_m ?? 0))
+              .map((h, i) => (
+                <span className="pill" key={i}>
+                  {HAZARD_ICON[h.type] || "❗"} {hazardLabel(h.type)}
+                  {h.distance_along_m != null && (
+                    <span style={{ opacity: 0.6, marginLeft: 4 }}>· {fmtAhead(h.distance_along_m)}</span>
+                  )}
+                </span>
+              ))}
           </div>
         </>
       )}
@@ -864,7 +916,7 @@ function GuardianChat({ trip }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, mobility, gpsOn, toggleGps }) {
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, mobility, gpsOn, toggleGps }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -908,7 +960,18 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
         <button className="btn btn-ghost" onClick={() => advance(0.8)}>Near end ↦</button>
         <button className="btn btn-ghost" onClick={findHarbor}>Safe harbour</button>
         <button className="btn btn-ghost" onClick={findMobility}>Alternatives</button>
+        <button className="btn btn-ghost" onClick={findEssentials}>Essentials</button>
       </div>
+
+      {essentials?.length > 0 && (
+        <div className="pills">
+          {essentials.map((e, i) => (
+            <span className="pill" key={i}>
+              {e.icon || "🛒"} {e.label} · {fmtKm(e.distance_m)}
+            </span>
+          ))}
+        </div>
+      )}
 
       {mobility && (
         <>
