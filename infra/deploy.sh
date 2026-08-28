@@ -41,4 +41,8 @@ gcloud run deploy safejourney-monitor \
 echo ""
 echo "agent-api URL:"
 gcloud run services describe safejourney-api --region "$REGION" --format='value(status.url)'
+echo ""
+echo "IMPORTANT (once per project): create the Firestore indexes the monitor needs, or every"
+echo "monitoring tick 500s and active trips never get hazards/alerts:"
+echo "  PROJECT_ID=${PROJECT_ID} bash infra/deploy-indexes.sh"
 echo "Next: PROJECT_ID=${PROJECT_ID} REGION=${REGION} bash infra/schedule.sh"
