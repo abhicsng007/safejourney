@@ -196,6 +196,18 @@ def web_advisories(req: WebAdvisoryReq) -> dict:
 
     res = route_web_advisories_debug(
         req.origin_label, req.destination_label, req.encoded_polyline)
+    # Always log the diagnosis so we can see WHY a route came back empty from Cloud Logging,
+    # even when the UI (which never sends debug=true) shows nothing.
+    d = res.get("diag", {})
+    print(
+        f"[web-advisories] '{req.origin_label}' -> '{req.destination_label}' "
+        f"gemini={d.get('gemini_available')} model={d.get('model')} "
+        f"pts={d.get('route_points')} raw_len={d.get('raw_len')} "
+        f"parsed={d.get('parsed_count')} kept={d.get('kept')} "
+        f"no_geocode={d.get('dropped_no_geocode')} too_far={d.get('dropped_too_far')} "
+        f"error={d.get('error')} raw_preview={d.get('raw_preview')!r}",
+        flush=True,
+    )
     if req.debug:
         return res  # {"advisories": [...], "diag": {...}}
     return {"advisories": res["advisories"]}
