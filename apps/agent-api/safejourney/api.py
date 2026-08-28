@@ -274,10 +274,18 @@ def ack_alert(alert_id: str) -> dict:
 # ---------- incidents (crowd reports) ----------
 @app.post("/incidents")
 def report_incident(req: IncidentReq) -> dict:
+    import time as _time
+    from .tools.incident import ttl_for
+
+    verified = req.source in ("official", "authority")
+    now = _time.time()
     inc = Incident(
         type=req.type, severity=req.severity, lat=req.lat, lng=req.lng,
         geohash=geohash_encode(req.lat, req.lng, 7),
         description=req.description, source=req.source,
+        verified=verified,
+        reported_at=now,
+        expires_at=now + ttl_for(req.type, verified),
     )
     get_repo().add_incident(inc)
     return inc.model_dump(mode="json")

@@ -62,3 +62,44 @@ def test_mobility_returns_cab_and_transit_links():
 def test_mobility_without_destination_has_no_transit():
     mob = mobility_options(12.9166, 77.6101)
     assert all(o["kind"] != "transit" for o in mob["options"])
+
+
+# ---- incident expiry / fade ----
+
+def test_incident_ttl_by_type():
+    from safejourney.tools.incident import ttl_for
+
+    assert ttl_for("pothole") > ttl_for("waterlogging")  # damage outlives standing water
+    assert ttl_for("pothole", verified=True) == ttl_for("pothole") * 3  # official lasts longer
+
+
+def test_incident_fades_and_expires(monkeypatch):
+    import time
+    from safejourney import repo as repo_mod
+    from safejourney_shared.models import Incident
+    from safejourney_shared.geo import geohash_encode
+    from safejourney.tools.incident import incident_hazards, ttl_for
+
+    monkeypatch.setattr(repo_mod, "_repo", repo_mod.InMemoryRepo())
+    repo = repo_mod.get_repo()
+    lat, lng = 12.90, 77.60
+    gh = geohash_encode(lat, lng, 7)
+    route = [(12.90, 77.60), (12.901, 77.601)]
+    now = time.time()
+
+    def add(t, frac):
+        ttl = ttl_for(t)
+        repo.add_incident(Incident(type=t, severity="high", lat=lat, lng=lng, geohash=gh,
+                                   description="x", source="crowd",
+                                   reported_at=now - frac * ttl,
+                                   expires_at=now - frac * ttl + ttl))
+
+    add("pothole", 0.1)        # fresh
+    add("waterlogging", 0.7)   # aging -> faded
+    add("accident", 1.2)       # expired -> gone
+    hz = {h.type.value: h for h in incident_hazards(route, [gh])}
+
+    assert "accident" not in hz                      # expired dropped
+    assert hz["pothole"].severity.value == "high"    # fresh keeps severity
+    assert hz["waterlogging"].severity.value == "moderate"  # faded one notch
+    assert "fading" in hz["waterlogging"].description

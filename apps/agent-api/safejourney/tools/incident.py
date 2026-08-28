@@ -14,6 +14,35 @@ from safejourney_shared.hazards import Hazard, HazardType, Severity
 
 from ..repo import get_repo
 
+# How long a crowd report stays relevant before it expires entirely (seconds). Transient
+# conditions (waterlogging, a cleared accident) fade fast; physical damage (potholes, road
+# works) lasts. A verified/official report gets a longer life (see ttl_for).
+INCIDENT_TTL_S: dict[str, int] = {
+    "waterlogging": 3 * 3600,
+    "flood": 6 * 3600,
+    "lightning": 2 * 3600,
+    "storm": 3 * 3600,
+    "electrocution": 6 * 3600,
+    "accident": 3 * 3600,
+    "unsafe_area": 12 * 3600,
+    "landslide": 3 * 24 * 3600,
+    "roadwork": 14 * 24 * 3600,
+    "pothole": 7 * 24 * 3600,
+}
+_DEFAULT_TTL_S = 24 * 3600
+
+_SEV_ORDER = [Severity.INFO, Severity.LOW, Severity.MODERATE, Severity.HIGH, Severity.CRITICAL]
+
+
+def ttl_for(hazard_type: str, verified: bool = False) -> int:
+    """Lifetime of a report of this type; verified/official reports live 3x longer."""
+    base = INCIDENT_TTL_S.get(hazard_type, _DEFAULT_TTL_S)
+    return base * 3 if verified else base
+
+
+def _downgrade(sev: Severity) -> Severity:
+    return _SEV_ORDER[max(0, _SEV_ORDER.index(sev) - 1)]
+
 
 def incident_hazards(
     corridor_points: list[tuple[float, float]],
@@ -36,11 +65,18 @@ def incident_hazards(
             sev = Severity(inc.severity)
         except ValueError:
             sev = Severity.MODERATE
-        # Fresh reports weigh full; decay confidence for older unverified ones.
-        age_min = (now - inc.reported_at) / 60
+        # Age the report against its type-specific lifetime: drop it once past its life, and
+        # fade its severity (unverified reports only) over the second half of that life.
+        ttl = ttl_for(inc.type, inc.verified)
+        frac = (now - inc.reported_at) / ttl if ttl else 1.0
+        if frac >= 1.0:
+            continue  # stale — belt-and-suspenders with the repo's expires_at filter
         desc = inc.description or f"Reported {htype.value.replace('_', ' ')}"
-        if not inc.verified and age_min > 120:
-            desc += " (unverified, aging)"
+        if not inc.verified and frac >= 0.5:
+            sev = _downgrade(sev)
+            desc += " (fading — unverified & aging)"
         out.append(Hazard(htype, sev, inc.lat, inc.lng, f"report:{inc.source}", desc,
-                          offset_m=offset, meta={"incident_id": inc.id, "verified": inc.verified}))
+                          offset_m=offset,
+                          meta={"incident_id": inc.id, "verified": inc.verified,
+                                "age_frac": round(frac, 2)}))
     return out
