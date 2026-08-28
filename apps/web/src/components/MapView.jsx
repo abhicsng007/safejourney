@@ -210,9 +210,12 @@ export default function MapView({
     if (position) add([position.lng, position.lat], marker("#ffffff", "●", 20));
     harbors.forEach((h) => addLabeled([h.lng, h.lat], marker("#f0b429", "🛟", 24), h.name || h.label, h.why));
     essentials.forEach((e) => addLabeled([e.lng, e.lat], marker("#8ad6ff", e.icon || "🛒", 22), e.name || e.label, e.why));
-    webAdvisories.forEach((a) =>
+    webAdvisories.forEach((a) => {
+      const when = a.date ? ` · reported ${fmtReportDate(a.date)}` : "";
       addLabeled([a.lng, a.lat], marker("#c9a227", "🌐", 22),
-        `Web report · ${a.locality || ""}`, `${a.summary || ""}<br/><i>source: ${a.source || "web"} (unverified)</i>`));
+        `Web report · ${a.locality || ""}`,
+        `${a.summary || ""}<br/><i>source: ${a.source || "web"}${when} (unverified)</i>`);
+    });
 
     function addLabeled(lngLat, el, title, why) {
       el.style.cursor = "pointer";
@@ -270,6 +273,15 @@ export default function MapView({
 
 function fmtDist(m) {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtReportDate(d) {
+  const s = (d || "").trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1] || ""} ${m[1]}`.trim();
+  m = /^(\d{4})-(\d{2})/.exec(s);
+  if (m) return `${MONTHS[Number(m[2]) - 1] || ""} ${m[1]}`.trim();
+  return s;
 }
 
 // The route currently drawn on the map (active trip line, else the selected candidate).

@@ -32,6 +32,16 @@ function fmtKm(m) {
 function fmtMin(s) {
   return `${Math.round(s / 60)} min`;
 }
+// Format a web-report date ("2026-08-26" or "2026-08") into a short human label.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtReportDate(d) {
+  const s = (d || "").trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1] || ""} ${m[1]}`.trim();
+  m = /^(\d{4})-(\d{2})/.exec(s);
+  if (m) return `${MONTHS[Number(m[2]) - 1] || ""} ${m[1]}`.trim();
+  return s; // already human, or blank
+}
 function pointAtFraction(coords, f) {
   if (!coords.length) return null;
   const i = Math.min(coords.length - 1, Math.max(0, Math.round((coords.length - 1) * f)));
@@ -756,11 +766,18 @@ function WebAdvisoriesBlock({ webAdvisories, webBusy }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {webAdvisories.map((a, i) => (
           <div className="agent-note" key={i} style={{ borderLeftColor: "#c9a227" }}>
-            <div className="a-head" style={{ color: "#c9a227" }}>
-              {HAZARD_ICON[a.type] || "🌐"} {hazardLabel(a.type)} · {a.locality}
+            <div className="a-head" style={{ color: "#c9a227", display: "flex", gap: 8, alignItems: "baseline" }}>
+              <span style={{ flex: 1 }}>{HAZARD_ICON[a.type] || "🌐"} {hazardLabel(a.type)} · {a.locality}</span>
+              {a.date && (
+                <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", opacity: 0.9 }}>
+                  📅 {fmtReportDate(a.date)}
+                </span>
+              )}
             </div>
             <div className="a-body">{a.summary}</div>
-            <div className="hint" style={{ fontStyle: "italic" }}>source: {a.source} · unverified, approximate</div>
+            <div className="hint" style={{ fontStyle: "italic" }}>
+              source: {a.source}{a.date ? ` · reported ${fmtReportDate(a.date)}` : ""} · unverified, approximate
+            </div>
           </div>
         ))}
       </div>
