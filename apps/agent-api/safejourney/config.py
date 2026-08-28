@@ -26,7 +26,8 @@ class Settings:
     use_vertex: bool = _b("GOOGLE_GENAI_USE_VERTEXAI", bool(os.getenv("GCP_PROJECT")))
     gemini_api_key: str = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    # (Set GEMINI_MODEL=gemini-3.5-flash or newer for the hackathon submission.)
+    # (Override GEMINI_MODEL only with a model your GCP project can access in its region and
+    #  that supports Search grounding — an unavailable id makes grounded calls 404.)
 
     # --- Maps Platform ---
     maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")

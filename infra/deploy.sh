@@ -7,7 +7,9 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 REGION="${REGION:-us-central1}"
 MAPS_KEY="${MAPS_KEY:-}"
-MODEL="${GEMINI_MODEL:-gemini-3.5-flash}"
+# Must be a model your project can access in $REGION and that supports Search grounding.
+# gemini-3.5-flash is NOT available to all projects/regions (404) — 2.5-flash is a safe default.
+MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
 FCM_ENABLED="${FCM_ENABLED:-false}"   # set true once Firebase Cloud Messaging is configured
 WEB_APP_URL="${WEB_APP_URL:-}"        # deployed PWA URL, so a push click deep-links back
 REPO="safejourney"
