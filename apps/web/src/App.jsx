@@ -70,6 +70,8 @@ export default function App() {
   const [alerts, setAlerts] = useState([]);
   const [harbors, setHarbors] = useState([]);
   const [essentials, setEssentials] = useState([]);
+  const [webAdvisories, setWebAdvisories] = useState([]);
+  const [webBusy, setWebBusy] = useState(false);
   const [mobility, setMobility] = useState(null);
   const [position, setPosition] = useState(null);
   const [safetyScore, setSafetyScore] = useState(null);
@@ -169,6 +171,8 @@ export default function App() {
       setHazards(selectedHazards(res.plan, res.plan.recommended_route_id));
       setPhase("prep");
       setFitKey((k) => k + 1);
+      // Web-grounded advisories stream in after routes are shown (they take a few seconds).
+      fetchWebAdvisories(res.plan);
     } catch (e) {
       pushToast("Couldn't plan route", String(e.message || e), "#ff6150");
     } finally {
@@ -179,6 +183,25 @@ export default function App() {
   function selectedHazards(p, id) {
     const r = p.routes.find((x) => x.route_id === id) || p.routes[0];
     return r ? r.hazards : [];
+  }
+
+  async function fetchWebAdvisories(p) {
+    const r = p.routes?.find((x) => x.route_id === p.recommended_route_id) || p.routes?.[0];
+    if (!r?.encoded_polyline) return;
+    setWebAdvisories([]);
+    setWebBusy(true);
+    try {
+      const res = await api.webAdvisories({
+        origin_label: originLabel,
+        destination_label: destLabel,
+        encoded_polyline: r.encoded_polyline,
+      });
+      setWebAdvisories(res.advisories || []);
+    } catch {
+      setWebAdvisories([]);
+    } finally {
+      setWebBusy(false);
+    }
   }
 
   async function startGuardian() {
@@ -208,6 +231,10 @@ export default function App() {
       setPhase("active");
       setFitKey((k) => k + 1);
       refresh(t.id, true);
+      // Auto-show nearby refuges + supplies without a tap.
+      const start = t.origin;
+      findHarbor(start, true);
+      findEssentials(start, true);
     } catch (e) {
       pushToast("Couldn't start", String(e.message || e), "#ff6150");
     } finally {
@@ -317,12 +344,13 @@ export default function App() {
     } catch {}
   }
 
-  async function findHarbor() {
-    if (!position) return;
+  async function findHarbor(point, silent = false) {
+    const p = point || position;
+    if (!p) return;
     try {
-      const res = await api.safeHarbors(position.lat, position.lng);
+      const res = await api.safeHarbors(p.lat, p.lng);
       setHarbors(res.harbors || []);
-      pushToast("Safe harbours nearby", `${res.harbors?.length || 0} refuge(s) marked on the map.`, "#f0b429");
+      if (!silent) pushToast("Safe harbours nearby", `${res.harbors?.length || 0} refuge(s) marked on the map.`, "#f0b429");
     } catch {}
   }
 
@@ -360,13 +388,13 @@ export default function App() {
     }
   }
 
-  async function findEssentials() {
-    const p = position || origin;
+  async function findEssentials(point, silent = false) {
+    const p = point || position || origin;
     if (!p) return;
     try {
       const res = await api.essentials(p.lat, p.lng);
       setEssentials(res.essentials || []);
-      pushToast("Essentials nearby", `${res.essentials?.length || 0} place(s) marked on the map.`, "#8ad6ff");
+      if (!silent) pushToast("Essentials nearby", `${res.essentials?.length || 0} place(s) marked on the map.`, "#8ad6ff");
     } catch {}
   }
 
@@ -381,6 +409,7 @@ export default function App() {
     setAlerts([]);
     setHarbors([]);
     setEssentials([]);
+    setWebAdvisories([]);
     setMobility(null);
     setPosition(null);
     setSafetyScore(null);
@@ -434,6 +463,8 @@ export default function App() {
               prep={prep}
               plan={plan}
               mode={mode}
+              webAdvisories={webAdvisories}
+              webBusy={webBusy}
               proceed={() => {
                 setPhase("routes");
                 setFitKey((k) => k + 1);
@@ -452,6 +483,8 @@ export default function App() {
               selectedRoute={selectedRoute}
               startGuardian={startGuardian}
               busy={busy}
+              webAdvisories={webAdvisories}
+              webBusy={webBusy}
             />
           )}
 
@@ -488,6 +521,7 @@ export default function App() {
         hazards={hazards}
         harbors={harbors}
         essentials={essentials}
+        webAdvisories={phase === "prep" || phase === "routes" || phase === "active" ? webAdvisories : []}
         origin={phase !== "active" ? origin : trip?.origin}
         destination={phase !== "active" ? destination : trip?.destination}
         position={phase === "active" ? position : null}
@@ -710,13 +744,37 @@ function AgentNote({ agent }) {
   );
 }
 
+function WebAdvisoriesBlock({ webAdvisories, webBusy }) {
+  if (!webBusy && (!webAdvisories || webAdvisories.length === 0)) return null;
+  return (
+    <>
+      <div className="divider" />
+      <span className="section-label">🌐 Web reports for this route</span>
+      {webBusy && webAdvisories.length === 0 && (
+        <div className="hint">Researching recent road works, closures & warnings on the web…</div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {webAdvisories.map((a, i) => (
+          <div className="agent-note" key={i} style={{ borderLeftColor: "#c9a227" }}>
+            <div className="a-head" style={{ color: "#c9a227" }}>
+              {HAZARD_ICON[a.type] || "🌐"} {hazardLabel(a.type)} · {a.locality}
+            </div>
+            <div className="a-body">{a.summary}</div>
+            <div className="hint" style={{ fontStyle: "italic" }}>source: {a.source} · unverified, approximate</div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 const VERDICT_META = {
   go: { color: "#33d08c", label: "Good to go", ic: "✓" },
   caution: { color: "#f0b429", label: "Go prepared", ic: "!" },
   wait: { color: "#ff6150", label: "Better to wait", ic: "⏸" },
 };
 
-function PrepPanel({ prep, plan, mode, proceed }) {
+function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
   const [items, setItems] = useState(() => prep.checklist.map((c) => ({ ...c })));
   const meta = VERDICT_META[prep.verdict] || VERDICT_META.caution;
   const firstLeg = plan?.first_leg;
@@ -767,6 +825,8 @@ function PrepPanel({ prep, plan, mode, proceed }) {
         ))}
       </div>
 
+      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} />
+
       <button className="btn btn-primary" onClick={proceed}>
         See safe routes →
       </button>
@@ -774,7 +834,7 @@ function PrepPanel({ prep, plan, mode, proceed }) {
   );
 }
 
-function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy }) {
+function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy }) {
   return (
     <>
       <AgentNote agent={plan.agent} />
@@ -836,6 +896,8 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
           </ul>
         </>
       )}
+
+      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} />
 
       <button className="btn btn-primary" onClick={startGuardian} disabled={busy}>
         {busy ? "Starting…" : "Start Guardian on this route"}
@@ -995,9 +1057,9 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
       <div className="btn-row">
         <button className="btn btn-ghost" onClick={() => advance(0.4)}>Advance ↦</button>
         <button className="btn btn-ghost" onClick={() => advance(0.8)}>Near end ↦</button>
-        <button className="btn btn-ghost" onClick={findHarbor}>Safe harbour</button>
-        <button className="btn btn-ghost" onClick={findMobility}>Alternatives</button>
-        <button className="btn btn-ghost" onClick={findEssentials}>Essentials</button>
+        <button className="btn btn-ghost" onClick={() => findHarbor()}>Safe harbour</button>
+        <button className="btn btn-ghost" onClick={() => findMobility()}>Alternatives</button>
+        <button className="btn btn-ghost" onClick={() => findEssentials()}>Essentials</button>
       </div>
 
       {essentials?.length > 0 && (

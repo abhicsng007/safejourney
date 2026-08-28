@@ -42,6 +42,8 @@ export const api = {
   essentials: (lat, lng) => req(`/essentials?lat=${lat}&lng=${lng}`),
   reportIncident: (body) =>
     req("/incidents", { method: "POST", body: JSON.stringify(body) }),
+  webAdvisories: (body) =>
+    req("/web-advisories", { method: "POST", body: JSON.stringify(body) }),
   mobility: (lat, lng, dlat, dlng) =>
     req(`/mobility?lat=${lat}&lng=${lng}` + (dlat != null ? `&dlat=${dlat}&dlng=${dlng}` : "")),
   chat: (message, session_id = "web", trip_id = "") =>

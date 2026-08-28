@@ -80,6 +80,12 @@ class PositionReq(BaseModel):
     lng: float
 
 
+class WebAdvisoryReq(BaseModel):
+    origin_label: str = ""
+    destination_label: str = ""
+    encoded_polyline: str
+
+
 class ChatReq(BaseModel):
     message: str
     session_id: str = "default"
@@ -179,6 +185,16 @@ def mobility(lat: float, lng: float, dlat: float | None = None, dlng: float | No
 def essentials(lat: float, lng: float) -> dict:
     """Nearby places to grab journey essentials — pharmacy, fuel, ATM, water/snacks."""
     return {"essentials": find_essentials(lat, lng)}
+
+
+@app.post("/web-advisories")
+def web_advisories(req: WebAdvisoryReq) -> dict:
+    """Web-grounded, source-cited advisories for the route (road works, closures, waterlogging).
+    Area-level and unverified — shown separately, not folded into the safety score."""
+    from .tools.web_advisories import route_web_advisories
+
+    return {"advisories": route_web_advisories(
+        req.origin_label, req.destination_label, req.encoded_polyline)}
 
 
 # ---------- trips ----------

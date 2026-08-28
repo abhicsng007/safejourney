@@ -36,6 +36,7 @@ export default function MapView({
   hazards = [],
   harbors = [],
   essentials = [],
+  webAdvisories = [],
   origin,
   destination,
   position,
@@ -176,6 +177,9 @@ export default function MapView({
     if (position) add([position.lng, position.lat], marker("#ffffff", "●", 20));
     harbors.forEach((h) => addLabeled([h.lng, h.lat], marker("#f0b429", "🛟", 24), h.name || h.label, h.why));
     essentials.forEach((e) => addLabeled([e.lng, e.lat], marker("#8ad6ff", e.icon || "🛒", 22), e.name || e.label, e.why));
+    webAdvisories.forEach((a) =>
+      addLabeled([a.lng, a.lat], marker("#c9a227", "🌐", 22),
+        `Web report · ${a.locality || ""}`, `${a.summary || ""}<br/><i>source: ${a.source || "web"} (unverified)</i>`));
 
     function addLabeled(lngLat, el, title, why) {
       el.style.cursor = "pointer";
@@ -187,7 +191,7 @@ export default function MapView({
       });
       markersRef.current.push(m);
     }
-  }, [origin, destination, position, harbors, essentials]);
+  }, [origin, destination, position, harbors, essentials, webAdvisories]);
 
   // fly to a just-picked location (search result / GPS) for a responsive "search" feel
   useEffect(() => {

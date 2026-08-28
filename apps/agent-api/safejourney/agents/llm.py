@@ -93,6 +93,53 @@ def generate_json(prompt: str, system: str = "", max_tokens: int = 400) -> Optio
         return None
 
 
+def generate_with_search(prompt: str, system: str = "", max_tokens: int = 700) -> Optional[str]:
+    """Generate grounded in live Google Search results (Vertex 'Grounding with Google Search').
+    Returns the model's text (which we ask to be JSON) or None on any failure."""
+    client = _client()
+    if client is None:
+        return None
+    s = get_settings()
+    try:
+        from google.genai import types
+
+        search_tool = types.Tool(google_search=types.GoogleSearch())
+        cfg = types.GenerateContentConfig(
+            system_instruction=system or None,
+            tools=[search_tool],
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+        )
+        resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
+        return (resp.text or "").strip() or None
+    except Exception as e:  # pragma: no cover - grounding may be unavailable
+        print(f"[llm] grounded search failed ({e})")
+        return None
+
+
+def parse_json_array(raw: str) -> list:
+    """Lenient parse of a JSON array from model text (may be fenced or have prose around it)."""
+    import json
+
+    t = (raw or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:]
+    try:
+        val = json.loads(t)
+        return val if isinstance(val, list) else []
+    except Exception:
+        i, j = t.find("["), t.rfind("]")
+        if 0 <= i < j:
+            try:
+                val = json.loads(t[i : j + 1])
+                return val if isinstance(val, list) else []
+            except Exception:
+                return []
+        return []
+
+
 def _parse_json_object(raw: str) -> Optional[dict]:
     import json
 
