@@ -41,6 +41,7 @@ def generate(prompt: str, system: str = "", max_tokens: int = 200) -> Optional[s
             system_instruction=system or None,
             max_output_tokens=max_tokens,
             temperature=0.4,
+            **_thinking_off(types),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         return (resp.text or "").strip() or None

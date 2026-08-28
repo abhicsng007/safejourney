@@ -263,7 +263,7 @@ def plan_reasoning(plan: dict, mode: str) -> Optional[dict]:
     try:
         from ..agents.llm import generate
 
-        summary = generate(prompt, max_tokens=150)
+        summary = generate(prompt, max_tokens=220)
     except Exception as e:  # pragma: no cover
         print(f"[agentic] plan_reasoning failed ({e})")
         summary = None
