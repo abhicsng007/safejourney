@@ -304,6 +304,15 @@ def monitor_tick() -> dict:
     return monitor_dispatch()
 
 
+@app.post("/monitor/cleanup")
+def monitor_cleanup() -> dict:
+    """Physically delete expired crowd reports. Called on a slow Cloud Scheduler cron."""
+    import time as _time
+
+    deleted = get_repo().delete_expired_incidents(_time.time())
+    return {"deleted": deleted}
+
+
 @app.post("/monitor/evaluate")
 async def monitor_evaluate(payload: dict) -> dict:
     """Evaluate one trip. Accepts either {"trip_id": ...} or a Pub/Sub push envelope."""

@@ -103,3 +103,22 @@ def test_incident_fades_and_expires(monkeypatch):
     assert hz["pothole"].severity.value == "high"    # fresh keeps severity
     assert hz["waterlogging"].severity.value == "moderate"  # faded one notch
     assert "fading" in hz["waterlogging"].description
+
+
+def test_delete_expired_incidents(monkeypatch):
+    import time
+    from safejourney import repo as repo_mod
+    from safejourney_shared.models import Incident
+    from safejourney_shared.geo import geohash_encode
+
+    monkeypatch.setattr(repo_mod, "_repo", repo_mod.InMemoryRepo())
+    repo = repo_mod.get_repo()
+    now = time.time()
+    gh = geohash_encode(12.9, 77.6, 7)
+    repo.add_incident(Incident(type="pothole", severity="moderate", lat=12.9, lng=77.6,
+                               geohash=gh, source="crowd", reported_at=now, expires_at=now + 9999))
+    repo.add_incident(Incident(type="waterlogging", severity="low", lat=12.9, lng=77.6,
+                               geohash=gh, source="crowd", reported_at=now - 9999, expires_at=now - 10))
+    deleted = repo.delete_expired_incidents(now)
+    assert deleted == 1
+    assert len(repo._incidents) == 1  # the fresh pothole survives

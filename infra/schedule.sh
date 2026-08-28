@@ -31,6 +31,18 @@ else
     --uri "${API_URL}/monitor/dispatch" --http-method POST
 fi
 
+CLEANUP_CRON="${CLEANUP_CRON:-0 */6 * * *}"   # every 6 hours — purge expired crowd reports
+echo "== Scheduler cleanup -> ${API_URL}/monitor/cleanup (cron: ${CLEANUP_CRON}) =="
+if gcloud scheduler jobs describe safejourney-cleanup --location "$REGION" >/dev/null 2>&1; then
+  gcloud scheduler jobs update http safejourney-cleanup \
+    --location "$REGION" --schedule "$CLEANUP_CRON" \
+    --uri "${API_URL}/monitor/cleanup" --http-method POST
+else
+  gcloud scheduler jobs create http safejourney-cleanup \
+    --location "$REGION" --schedule "$CLEANUP_CRON" \
+    --uri "${API_URL}/monitor/cleanup" --http-method POST
+fi
+
 echo "== Pub/Sub push subscription -> ${WORKER_URL}/pubsub/push =="
 # Allow Pub/Sub to mint OIDC tokens for the worker.
 gcloud run services add-iam-policy-binding safejourney-monitor \

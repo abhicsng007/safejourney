@@ -115,6 +115,15 @@ class InMemoryRepo:
                     out.append(inc)
         return out
 
+    def delete_expired_incidents(self, now: Optional[float] = None) -> int:
+        """Physically remove incidents past their expires_at. Returns how many were deleted."""
+        now = now or time.time()
+        with self._lock:
+            stale = [i for i, inc in self._incidents.items() if inc.expires_at and inc.expires_at < now]
+            for i in stale:
+                self._incidents.pop(i, None)
+        return len(stale)
+
     # --- hazard cache (geohash+type keyed, TTL) ---
     def cache_get(self, key: str) -> Optional[dict]:
         item = self._cache.get(key)
@@ -208,6 +217,20 @@ class FirestoreRepo(InMemoryRepo):
                     continue
                 out.append(inc)
         return out
+
+    def delete_expired_incidents(self, now: Optional[float] = None) -> int:
+        """Batch-delete incidents past their expires_at (a Cloud Scheduler cleanup target)."""
+        now = now or time.time()
+        col = self.db.collection("incidents")
+        q = col.where("expires_at", "<", now).limit(400)  # bounded per run; scheduler drains over time
+        batch = self.db.batch()
+        count = 0
+        for d in q.stream():
+            batch.delete(d.reference)
+            count += 1
+        if count:
+            batch.commit()
+        return count
 
 
 _repo: Optional[InMemoryRepo] = None
