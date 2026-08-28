@@ -84,6 +84,8 @@ export default function App() {
   const [webBusy, setWebBusy] = useState(false);
   const [mobility, setMobility] = useState(null);
   const [position, setPosition] = useState(null);
+  const [simulating, setSimulating] = useState(false);
+  const simRef = useRef(null);
   const [safetyScore, setSafetyScore] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [status, setStatus] = useState({ online: null, msg: "Checking backend…" });
@@ -252,6 +254,9 @@ export default function App() {
     }
   }
 
+  // stop the simulated drive if the view unmounts
+  useEffect(() => () => { if (simRef.current) cancelAnimationFrame(simRef.current); }, []);
+
   // active monitoring loop (client drives ticks locally; in cloud, Scheduler does this)
   useEffect(() => {
     if (phase !== "active" || !trip) return;
@@ -354,6 +359,57 @@ export default function App() {
     } catch {}
   }
 
+  // Judge demo: glide a traveller along the whole route over ~1 minute, streaming its
+  // position so the live guardian flow (road-ahead scans, proximity warnings, arrival)
+  // plays out on its own — no real travel needed.
+  const SIM_DURATION_MS = 60000;
+  function stopSim() {
+    if (simRef.current) cancelAnimationFrame(simRef.current);
+    simRef.current = null;
+    setSimulating(false);
+  }
+  function simulateJourney() {
+    if (!trip?.encoded_polyline) return;
+    if (simulating) { stopSim(); return; }
+    const coords = decodePolyline(trip.encoded_polyline); // [lng, lat]
+    if (coords.length < 2) return;
+    // cumulative distance along the line so speed is even regardless of vertex spacing
+    const cum = [0];
+    for (let i = 1; i < coords.length; i++) {
+      cum.push(cum[i - 1] + haversineM(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]));
+    }
+    const total = cum[cum.length - 1] || 1;
+    setSimulating(true);
+    setGpsOn(false);              // simulated position overrides any live GPS
+    warnedProx.current = new Set(); // re-arm proximity warnings for the run
+    const start = performance.now();
+    let lastPush = 0;
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / SIM_DURATION_MS);
+      const d = t * total;
+      let i = 1;
+      while (i < cum.length && cum[i] < d) i++;
+      const p0 = coords[i - 1], p1 = coords[Math.min(i, coords.length - 1)];
+      const seg = (cum[Math.min(i, cum.length - 1)] - cum[i - 1]) || 1;
+      const fr = Math.max(0, Math.min(1, (d - cum[i - 1]) / seg));
+      const pos = { lat: p0[1] + (p1[1] - p0[1]) * fr, lng: p0[0] + (p1[0] - p0[0]) * fr };
+      setPosition(pos);
+      if (now - lastPush > 1500) { // stream to the backend a few times, not every frame
+        lastPush = now;
+        api.setPosition(trip.id, pos.lat, pos.lng).catch(() => {});
+      }
+      if (t < 1) {
+        simRef.current = requestAnimationFrame(step);
+      } else {
+        simRef.current = null;
+        setSimulating(false);
+        api.setPosition(trip.id, pos.lat, pos.lng).catch(() => {});
+        pushToast("Arrived", "Simulated journey complete — you reached the destination.", "#33d08c");
+      }
+    };
+    simRef.current = requestAnimationFrame(step);
+  }
+
   async function findHarbor(point, silent = false) {
     const p = point || position;
     if (!p) return;
@@ -409,6 +465,7 @@ export default function App() {
   }
 
   async function arrived() {
+    stopSim();
     if (trip) await api.complete(trip.id).catch(() => {});
     setPhase("plan");
     setTrip(null);
@@ -513,6 +570,8 @@ export default function App() {
               mobility={mobility}
               gpsOn={gpsOn}
               toggleGps={() => setGpsOn((v) => !v)}
+              simulateJourney={simulateJourney}
+              simulating={simulating}
             />
           )}
         </div>
@@ -535,6 +594,8 @@ export default function App() {
         origin={phase !== "active" ? origin : trip?.origin}
         destination={phase !== "active" ? destination : trip?.destination}
         position={phase === "active" ? position : null}
+        travelerMode={trip?.mode}
+        followTraveler={simulating}
         onMapClick={setting ? onMapClick : null}
         scanning={phase === "plan" && busy}
         fitKey={fitKey}
@@ -1022,7 +1083,7 @@ function GuardianChat({ trip }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, mobility, gpsOn, toggleGps }) {
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -1040,6 +1101,18 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
             <div className="score-badge" style={{ color, fontSize: 16 }}>◍ {safetyScore} · {rating}</div>
           </div>
         )}
+      </div>
+
+      <button
+        className={`btn ${simulating ? "btn-ghost" : "btn-primary"}`}
+        style={{ marginTop: 12 }}
+        onClick={simulateJourney}
+      >
+        {simulating ? "⏹ Stop simulation" : `▶ Simulate the drive (${MODES.find((m) => m.id === trip?.mode)?.label || "travel"} · ~1 min)`}
+      </button>
+      <div className="hint">
+        Watch a {MODES.find((m) => m.id === trip?.mode)?.label?.toLowerCase() || "traveller"} drive the whole
+        route on the map while Guardian scans the road ahead and alerts on hazards — no real travel needed.
       </div>
 
       <div className="divider" />

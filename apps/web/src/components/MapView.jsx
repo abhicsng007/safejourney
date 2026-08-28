@@ -19,6 +19,14 @@ const OSM_STYLE = {
   ],
 };
 
+const TRAVELER_ICON = { walk: "🚶", two_wheeler: "🏍️", car: "🚗", transit: "🚌" };
+function travelerEl(mode) {
+  const el = document.createElement("div");
+  el.className = "traveler";
+  el.textContent = TRAVELER_ICON[mode] || "🧭";
+  return el;
+}
+
 function marker(color, glyph, size = 26) {
   const el = document.createElement("div");
   el.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;background:${color};
@@ -40,6 +48,8 @@ export default function MapView({
   origin,
   destination,
   position,
+  travelerMode,
+  followTraveler,
   onMapClick,
   scanning,
   fitKey,
@@ -208,7 +218,7 @@ export default function MapView({
     };
     if (origin) add([origin.lng, origin.lat], marker("#33d08c", "A"));
     if (destination) add([destination.lng, destination.lat], marker("#25c7dc", "B"));
-    if (position) add([position.lng, position.lat], marker("#ffffff", "●", 20));
+    // the traveller (position) has its own marker + effect so it can move smoothly
     harbors.forEach((h) => addLabeled([h.lng, h.lat], marker("#f0b429", "🛟", 24), h.name || h.label, h.why));
     essentials.forEach((e) => addLabeled([e.lng, e.lat], marker("#8ad6ff", e.icon || "🛒", 22), e.name || e.label, e.why));
     webAdvisories.forEach((a) => {
@@ -228,7 +238,35 @@ export default function MapView({
       });
       markersRef.current.push(m);
     }
-  }, [origin, destination, position, harbors, essentials, webAdvisories]);
+  }, [origin, destination, harbors, essentials, webAdvisories]);
+
+  // the moving traveller — a dedicated marker updated in place so it glides during the
+  // simulated drive (mode icon: walk / bike / car / bus). Kept out of the markers effect
+  // above so a per-frame position change doesn't rebuild every other marker.
+  const travelerRef = useRef(null);
+  const travelerModeRef = useRef(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!position || mapMode !== "active") {
+      if (travelerRef.current) { travelerRef.current.remove(); travelerRef.current = null; }
+      return;
+    }
+    const apply = () => {
+      if (!travelerRef.current || travelerModeRef.current !== travelerMode) {
+        if (travelerRef.current) travelerRef.current.remove();
+        travelerModeRef.current = travelerMode;
+        travelerRef.current = new maplibregl.Marker({ element: travelerEl(travelerMode) })
+          .setLngLat([position.lng, position.lat])
+          .addTo(map);
+      } else {
+        travelerRef.current.setLngLat([position.lng, position.lat]);
+      }
+      if (followTraveler) map.easeTo({ center: [position.lng, position.lat], duration: 260, essential: true });
+    };
+    if (map._sjReady) apply();
+    else map.once("sjready", apply);
+  }, [position, travelerMode, followTraveler, mapMode]);
 
   // radar sweep over the origin while routes are being scanned
   const radarRef = useRef(null);
