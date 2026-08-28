@@ -54,3 +54,14 @@ export const DEMO_HAZARDS = [
   { type: "landslide", severity: "critical", label: "Landslide debris" },
   { type: "pothole", severity: "moderate", label: "Broken road / pit" },
 ];
+
+// Hazards a traveller can report from the road — filed as geotagged crowd reports so the
+// next traveller on the same corridor is warned.
+export const REPORT_TYPES = [
+  { type: "pothole", severity: "moderate", label: "Broken road / pit" },
+  { type: "waterlogging", severity: "moderate", label: "Waterlogging" },
+  { type: "electrocution", severity: "critical", label: "Live wire / shock" },
+  { type: "accident", severity: "high", label: "Accident" },
+  { type: "roadwork", severity: "low", label: "Construction" },
+  { type: "unsafe_area", severity: "moderate", label: "Unsafe spot" },
+];

@@ -786,6 +786,16 @@ input:focus {
   50% { opacity: 0.45; }
 }
 
+.report-pill {
+  cursor: pointer;
+  border-color: var(--line-strong);
+}
+.report-pill:hover {
+  border-color: var(--caution);
+  color: var(--ink);
+  background: rgba(240, 180, 41, 0.1);
+}
+
 /* ---------- location autocomplete ---------- */
 .loc-field {
   position: relative;

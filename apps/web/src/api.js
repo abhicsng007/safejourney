@@ -40,6 +40,8 @@ export const api = {
   geoReverse: (lat, lng) => req(`/geocode/reverse?lat=${lat}&lng=${lng}`),
   safeHarbors: (lat, lng) => req(`/safe-harbors?lat=${lat}&lng=${lng}`),
   essentials: (lat, lng) => req(`/essentials?lat=${lat}&lng=${lng}`),
+  reportIncident: (body) =>
+    req("/incidents", { method: "POST", body: JSON.stringify(body) }),
   mobility: (lat, lng, dlat, dlng) =>
     req(`/mobility?lat=${lat}&lng=${lng}` + (dlat != null ? `&dlat=${dlat}&dlng=${dlng}` : "")),
   chat: (message, session_id = "web", trip_id = "") =>

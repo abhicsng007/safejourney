@@ -7,6 +7,7 @@ import {
   RATING_COLOR,
   ACTION_META,
   DEMO_HAZARDS,
+  REPORT_TYPES,
   HAZARD_ICON,
   hazardLabel,
 } from "./lib/hazards.js";
@@ -335,6 +336,30 @@ export default function App() {
     } catch {}
   }
 
+  async function reportHazard(rt) {
+    const p = position;
+    if (!p) {
+      pushToast("No location yet", "Turn on GPS or advance so I know where the hazard is.", "#f0b429");
+      return;
+    }
+    try {
+      await api.reportIncident({
+        type: rt.type,
+        severity: rt.severity,
+        lat: p.lat,
+        lng: p.lng,
+        description: `${rt.label} reported by a traveller on this road.`,
+        source: "crowd",
+      });
+      pushToast("Thanks — reported", `${rt.label} logged. Travellers behind you will be warned.`, "#33d08c");
+      // Surface it immediately on this trip too.
+      await api.tick();
+      if (trip) await refresh(trip.id);
+    } catch (e) {
+      pushToast("Report failed", String(e.message || e), "#ff6150");
+    }
+  }
+
   async function findEssentials() {
     const p = position || origin;
     if (!p) return;
@@ -441,6 +466,7 @@ export default function App() {
               findMobility={findMobility}
               findEssentials={findEssentials}
               essentials={essentials}
+              reportHazard={reportHazard}
               mobility={mobility}
               gpsOn={gpsOn}
               toggleGps={() => setGpsOn((v) => !v)}
@@ -916,7 +942,7 @@ function GuardianChat({ trip }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, mobility, gpsOn, toggleGps }) {
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, mobility, gpsOn, toggleGps }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -944,6 +970,17 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
         </button>
       </div>
       {gpsOn && <div className="hint">Streaming your real position — Guardian scans only the road ahead of you.</div>}
+
+      <div className="divider" />
+      <span className="section-label">See a hazard? Report it</span>
+      <div className="hint">Files a geotagged report at your location so travellers behind you are warned.</div>
+      <div className="pills">
+        {REPORT_TYPES.map((rt) => (
+          <button key={rt.type} className="pill report-pill" onClick={() => reportHazard(rt)}>
+            {HAZARD_ICON[rt.type] || "❗"} {rt.label}
+          </button>
+        ))}
+      </div>
 
       <div className="divider" />
       <span className="section-label">Simulate a hazard (demo)</span>
