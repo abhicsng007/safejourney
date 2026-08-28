@@ -84,6 +84,7 @@ class WebAdvisoryReq(BaseModel):
     origin_label: str = ""
     destination_label: str = ""
     encoded_polyline: str
+    debug: bool = False
 
 
 class ChatReq(BaseModel):
@@ -191,10 +192,13 @@ def essentials(lat: float, lng: float) -> dict:
 def web_advisories(req: WebAdvisoryReq) -> dict:
     """Web-grounded, source-cited advisories for the route (road works, closures, waterlogging).
     Area-level and unverified — shown separately, not folded into the safety score."""
-    from .tools.web_advisories import route_web_advisories
+    from .tools.web_advisories import route_web_advisories_debug
 
-    return {"advisories": route_web_advisories(
-        req.origin_label, req.destination_label, req.encoded_polyline)}
+    res = route_web_advisories_debug(
+        req.origin_label, req.destination_label, req.encoded_polyline)
+    if req.debug:
+        return res  # {"advisories": [...], "diag": {...}}
+    return {"advisories": res["advisories"]}
 
 
 # ---------- trips ----------
