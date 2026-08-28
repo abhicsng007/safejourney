@@ -635,7 +635,7 @@ function GuardianChat({ trip }) {
     setLog((l) => [...l, { role: "user", text: q }]);
     setBusy(true);
     try {
-      const res = await api.chat(q, trip?.id || "web");
+      const res = await api.chat(q, trip?.id || "web", trip?.id || "");
       if (res.error) {
         setUnavailable(true);
         setLog((l) => [...l, { role: "agent", text: "Guardian AI isn't configured (no Gemini key) — the rule-based guardian is still watching your route.", trace: [] }]);

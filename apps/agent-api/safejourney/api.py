@@ -83,6 +83,7 @@ class ChatReq(BaseModel):
     message: str
     session_id: str = "default"
     user_id: str = "local"
+    trip_id: str = ""
 
 
 class ForceHazardReq(BaseModel):
@@ -301,7 +302,7 @@ def agent_chat(req: ChatReq) -> dict:
     try:
         from .services.agentic import run_agent_trace
 
-        return run_agent_trace(req.message, req.session_id, req.user_id)
+        return run_agent_trace(req.message, req.session_id, req.user_id, req.trip_id)
     except RuntimeError as e:
         # ADK/Gemini not configured — return a clear, non-fatal message.
         return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}

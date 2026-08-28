@@ -64,11 +64,53 @@ def _summarize_tool_result(response) -> str:
     return text[:160] + ("…" if len(text) > 160 else "")
 
 
-def run_agent_trace(message: str, session_id: str = "default", user_id: str = "local") -> dict:
+def _trip_context(trip_id: str) -> str:
+    """A compact, grounded snapshot of the active trip, prepended to the chat so Guardian
+    answers about *this* journey instead of asking for origin/destination."""
+    if not trip_id:
+        return ""
+    from ..repo import get_repo
+
+    repo = get_repo()
+    trip = repo.get_trip(trip_id)
+    if not trip:
+        return ""
+    pos = trip.current_position or trip.origin
+    lines = [
+        "CONTEXT — the traveller is on this active trip (use it; don't ask for it again):",
+        f"- trip_id: {trip.id}",
+        f"- mode: {trip.mode.value}",
+        f"- from: {trip.origin_label or f'{trip.origin.lat:.4f},{trip.origin.lng:.4f}'}",
+        f"- to: {trip.destination_label or f'{trip.destination.lat:.4f},{trip.destination.lng:.4f}'}",
+        f"- current position: {pos.lat:.5f},{pos.lng:.5f}",
+        f"- status: {trip.status.value}",
+    ]
+    snap = repo.get_snapshot(trip.last_snapshot_id) if trip.last_snapshot_id else None
+    if snap:
+        if snap.hazards:
+            hz = "; ".join(
+                f"{h.get('type')}({h.get('severity')})" for h in snap.hazards[:6]
+            )
+            lines.append(f"- road ahead ({len(snap.hazards)} hazard(s), safety score "
+                         f"{round(snap.safety_score, 1)}): {hz}")
+        else:
+            lines.append(f"- road ahead: clear (safety score {round(snap.safety_score, 1)})")
+    lines.append("For the freshest read, call check_trip_now with this trip_id. "
+                 "Answer directly and specifically about this route.")
+    return "\n".join(lines) + "\n\n"
+
+
+def run_agent_trace(
+    message: str,
+    session_id: str = "default",
+    user_id: str = "local",
+    trip_id: str = "",
+) -> dict:
     """Run one turn through the Guardian Core fleet and capture a structured trace.
 
     Returns {reply, trace, agent}. `trace` is an ordered list of tool_call / tool_result
-    steps the agent took — the visible evidence of grounded, agentic behaviour.
+    steps the agent took — the visible evidence of grounded, agentic behaviour. When
+    `trip_id` is given, the active trip's context is prepended so Guardian answers about it.
     Raises RuntimeError (from build_guardian) if ADK/Gemini isn't configured.
     """
     from ..agents.fleet import build_guardian
@@ -86,7 +128,8 @@ def run_agent_trace(message: str, session_id: str = "default", user_id: str = "l
     except Exception:
         pass  # session already exists — keep its memory
 
-    content = types.Content(role="user", parts=[types.Part(text=message)])
+    prompt = _trip_context(trip_id) + message
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
     trace: list[dict] = []
     reply = ""
     for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):

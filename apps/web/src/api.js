@@ -37,6 +37,6 @@ export const api = {
   safeHarbors: (lat, lng) => req(`/safe-harbors?lat=${lat}&lng=${lng}`),
   mobility: (lat, lng, dlat, dlng) =>
     req(`/mobility?lat=${lat}&lng=${lng}` + (dlat != null ? `&dlat=${dlat}&dlng=${dlng}` : "")),
-  chat: (message, session_id = "web") =>
-    req("/agent/chat", { method: "POST", body: JSON.stringify({ message, session_id }) }),
+  chat: (message, session_id = "web", trip_id = "") =>
+    req("/agent/chat", { method: "POST", body: JSON.stringify({ message, session_id, trip_id }) }),
 };
