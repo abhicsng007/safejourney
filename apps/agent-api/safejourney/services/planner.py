@@ -58,7 +58,15 @@ def plan_and_score(
 ) -> dict:
     """Return safety-ranked candidate routes + a recommendation."""
     candidates = plan_routes(origin, dest, mode)
-    scored = [score_route(c, mode, risk_tolerance) for c in candidates]
+    # Score candidates concurrently — each scan_corridor does its own network fan-out, so
+    # scoring 3 routes serially tripled the plan latency. One worker per candidate.
+    if len(candidates) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+            scored = list(pool.map(lambda c: score_route(c, mode, risk_tolerance), candidates))
+    else:
+        scored = [score_route(c, mode, risk_tolerance) for c in candidates]
     ranked = rank_routes(scored)
 
     recommended = ranked[0] if ranked else None

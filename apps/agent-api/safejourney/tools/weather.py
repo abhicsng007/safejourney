@@ -56,22 +56,32 @@ def _fallback(points: list[tuple[float, float]]) -> list[Hazard]:
     return []
 
 
+def _fetch_point(lat: float, lng: float) -> dict | None:
+    return get_json(
+        _OPEN_METEO,
+        params={
+            "latitude": round(lat, 4),
+            "longitude": round(lng, 4),
+            "current": "temperature_2m,precipitation,weather_code,wind_gusts_10m",
+        },
+    )
+
+
 def weather_hazards(points: list[tuple[float, float]]) -> list[Hazard]:
     """Sample the corridor and return weather hazards. `points` = [(lat, lng), ...]."""
+    from concurrent.futures import ThreadPoolExecutor
+
     sample = dedupe_close(points, min_gap_m=1500.0)[:8]  # cap API fan-out
     if not sample:
         return []
+    # Fetch all sample points concurrently — a serial loop here was the main source of the
+    # multi-second plan latency (8 points x per-route x per-candidate).
+    with ThreadPoolExecutor(max_workers=len(sample)) as pool:
+        results = list(pool.map(lambda p: _fetch_point(p[0], p[1]), sample))
+
     out: list[Hazard] = []
     any_live = False
-    for lat, lng in sample:
-        data = get_json(
-            _OPEN_METEO,
-            params={
-                "latitude": round(lat, 4),
-                "longitude": round(lng, 4),
-                "current": "temperature_2m,precipitation,weather_code,wind_gusts_10m",
-            },
-        )
+    for (lat, lng), data in zip(sample, results):
         if not data or "current" not in data:
             continue
         any_live = True

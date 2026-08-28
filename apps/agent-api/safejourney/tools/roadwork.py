@@ -9,9 +9,7 @@ from __future__ import annotations
 from safejourney_shared.geo import haversine_m
 from safejourney_shared.hazards import Hazard, HazardType, Severity
 
-from ._http import get_json
-
-_OVERPASS = "https://overpass-api.de/api/interpreter"
+from ._overpass import cached_overpass_elements
 
 
 def _bbox(points: list[tuple[float, float]], pad_deg: float = 0.01) -> tuple[float, float, float, float]:
@@ -38,8 +36,7 @@ def roadwork_hazards(points: list[tuple[float, float]], max_items: int = 12) -> 
     );
     out center {max_items};
     """
-    data = get_json(_OVERPASS, params={"data": query}, timeout=9.0)
-    elements = (data or {}).get("elements", []) if isinstance(data, dict) else []
+    elements = cached_overpass_elements(f"roadwork:{s:.2f},{w:.2f},{n:.2f},{e:.2f}", query, timeout=6.0)
     out: list[Hazard] = []
     for el in elements[:max_items]:
         lat = el.get("lat") or el.get("center", {}).get("lat")

@@ -22,6 +22,12 @@ FB_APP_ID="${VITE_FIREBASE_APP_ID:-}"
 FB_VAPID="${VITE_FIREBASE_VAPID_KEY:-}"
 [ -n "$FB_API_KEY" ] && echo "Baking Firebase config (push enabled)" || echo "No Firebase config — deploying without push"
 
+# Map basemap (optional) — a full MapLibre STYLE-JSON URL (not a bare API key), e.g.
+#   https://api.maptiler.com/maps/streets-v2/style.json?key=YOUR_MAPTILER_KEY
+# Leave unset to ship the keyless OpenStreetMap raster fallback.
+MAP_STYLE_URL="${VITE_MAP_STYLE_URL:-}"
+[ -n "$MAP_STYLE_URL" ] && echo "Baking map style URL (custom basemap)" || echo "No VITE_MAP_STYLE_URL — using OpenStreetMap raster fallback"
+
 # Cloud Build config with the config as build-args (written to /tmp to keep it self-contained).
 cat > /tmp/cloudbuild.web.yaml <<EOF
 steps:
@@ -32,6 +38,8 @@ steps:
       - apps/web/Dockerfile
       - --build-arg
       - VITE_API_URL=${API_URL}
+      - --build-arg
+      - VITE_MAP_STYLE_URL=${MAP_STYLE_URL}
       - --build-arg
       - VITE_FIREBASE_API_KEY=${FB_API_KEY}
       - --build-arg

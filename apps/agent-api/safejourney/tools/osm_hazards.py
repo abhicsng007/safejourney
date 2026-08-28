@@ -10,9 +10,7 @@ from __future__ import annotations
 from safejourney_shared.geo import haversine_m
 from safejourney_shared.hazards import Hazard, HazardType, Severity
 
-from ._http import get_json
-
-_OVERPASS = "https://overpass-api.de/api/interpreter"
+from ._overpass import cached_overpass_elements
 
 # OSM hazard=<value> -> (our type, severity, label)
 _HAZARD_TAG = {
@@ -81,8 +79,7 @@ def osm_hazards(points: list[tuple[float, float]], max_items: int = 20) -> list[
     );
     out center {max_items};
     """
-    data = get_json(_OVERPASS, params={"data": query}, timeout=9.0)
-    elements = (data or {}).get("elements", []) if isinstance(data, dict) else []
+    elements = cached_overpass_elements(f"osm:{s:.2f},{w:.2f},{n:.2f},{e:.2f}", query, timeout=6.0)
     out: list[Hazard] = []
     for el in elements[:max_items]:
         h = _hazard_from_element(el)
