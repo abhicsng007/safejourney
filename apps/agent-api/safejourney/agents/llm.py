@@ -151,6 +151,17 @@ def parse_json_array(raw: str) -> list:
         if 0 <= i < j:
             try:
                 val = json.loads(t[i : j + 1])
+                if isinstance(val, list):
+                    return val
+            except Exception:
+                pass
+        # Fallback: the model emitted the objects comma-separated but forgot the enclosing
+        # [ ] (a common grounded-search output). Wrap the {...}..{...} span and parse.
+        oi, oj = t.find("{"), t.rfind("}")
+        if 0 <= oi <= oj:
+            span = t[oi : oj + 1].rstrip().rstrip(",")
+            try:
+                val = json.loads("[" + span + "]")
                 return val if isinstance(val, list) else []
             except Exception:
                 return []
