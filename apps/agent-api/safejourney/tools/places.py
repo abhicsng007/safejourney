@@ -6,7 +6,9 @@ otherwise so the flow demos offline.
 
 from __future__ import annotations
 
-from safejourney_shared.geo import haversine_m
+from concurrent.futures import ThreadPoolExecutor
+
+from safejourney_shared.geo import haversine_m, sample_polyline
 
 from ._http import post_json
 from ..config import get_settings
@@ -196,3 +198,50 @@ def find_safe_harbors(lat: float, lng: float, radius_m: int = 1200, limit: int =
         })
     out.sort(key=lambda x: x["distance_m"])
     return out[:limit] or _fallback(lat, lng)[:limit]
+
+
+# --- route-corridor variants: cover the WHOLE path, not just one point ---
+
+def _sample_route(points: list[tuple[float, float]], step_m: float = 2500.0, max_samples: int = 8):
+    """Evenly-spaced query anchors along the route so places are found the whole way."""
+    sampled = [(la, ln) for la, ln, _ in sample_polyline(points, step_m=step_m)]
+    if len(sampled) <= max_samples:
+        return sampled
+    idx = [round(i * (len(sampled) - 1) / (max_samples - 1)) for i in range(max_samples)]
+    return [sampled[i] for i in idx]
+
+
+def _dedupe_places(items: list[dict], round_dp: int = 4) -> list[dict]:
+    """Merge the overlapping results from adjacent anchors, keeping the closest instance."""
+    best: dict[tuple, dict] = {}
+    for it in items:
+        k = (round(it["lat"], round_dp), round(it["lng"], round_dp))
+        if k not in best or it["distance_m"] < best[k]["distance_m"]:
+            best[k] = it
+    return list(best.values())
+
+
+def _along_route(points, finder, radius_m, per_point, total_limit) -> list[dict]:
+    if not points:
+        return []
+    anchors = _sample_route(points)
+    with ThreadPoolExecutor(max_workers=min(6, len(anchors))) as pool:
+        lists = pool.map(lambda p: finder(p[0], p[1], radius_m, per_point), anchors)
+    merged = [x for lst in lists for x in (lst or [])]
+    # Re-express distance as metres from the route line so "nearest" is meaningful anywhere.
+    from safejourney_shared.geo import point_near_polyline_m
+    for x in merged:
+        x["distance_m"] = round(point_near_polyline_m(x["lat"], x["lng"], points))
+    out = _dedupe_places(merged)
+    out.sort(key=lambda x: x["distance_m"])
+    return out[:total_limit]
+
+
+def find_safe_harbors_route(points, radius_m: int = 1200, per_point: int = 3, total_limit: int = 14) -> list[dict]:
+    """Safe harbours spread along the entire route corridor (not just near the origin)."""
+    return _along_route(points, find_safe_harbors, radius_m, per_point, total_limit)
+
+
+def find_essentials_route(points, radius_m: int = 1500, per_point: int = 3, total_limit: int = 18) -> list[dict]:
+    """Journey essentials (pharmacy/fuel/ATM/store) spread along the entire route corridor."""
+    return _along_route(points, find_essentials, radius_m, per_point, total_limit)

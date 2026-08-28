@@ -415,12 +415,18 @@ export default function App() {
   }
 
   async function findHarbor(point, silent = false) {
-    const p = point || position;
-    if (!p) return;
     try {
-      const res = await api.safeHarbors(p.lat, p.lng);
-      setHarbors(res.harbors || []);
-      if (!silent) pushToast("Safe harbours nearby", `${res.harbors?.length || 0} refuge(s) marked on the map.`, "#f0b429");
+      let harbors = [];
+      if (trip?.encoded_polyline) {
+        // Cover the WHOLE path so a refuge is reachable from anywhere, not just start/end.
+        harbors = (await api.safeHarborsRoute(trip.encoded_polyline)).harbors || [];
+      } else {
+        const p = point || position;
+        if (!p) return;
+        harbors = (await api.safeHarbors(p.lat, p.lng)).harbors || [];
+      }
+      setHarbors(harbors);
+      if (!silent) pushToast("Safe harbours on your route", `${harbors.length} refuge(s) marked along the whole path.`, "#f0b429");
     } catch {}
   }
 
@@ -459,12 +465,18 @@ export default function App() {
   }
 
   async function findEssentials(point, silent = false) {
-    const p = point || position || origin;
-    if (!p) return;
     try {
-      const res = await api.essentials(p.lat, p.lng);
-      setEssentials(res.essentials || []);
-      if (!silent) pushToast("Essentials nearby", `${res.essentials?.length || 0} place(s) marked on the map.`, "#8ad6ff");
+      let essentials = [];
+      if (trip?.encoded_polyline) {
+        // Pharmacies / fuel / ATMs / stores along the ENTIRE route, not just the ends.
+        essentials = (await api.essentialsRoute(trip.encoded_polyline)).essentials || [];
+      } else {
+        const p = point || position || origin;
+        if (!p) return;
+        essentials = (await api.essentials(p.lat, p.lng)).essentials || [];
+      }
+      setEssentials(essentials);
+      if (!silent) pushToast("Essentials on your route", `${essentials.length} place(s) marked along the whole path.`, "#8ad6ff");
     } catch {}
   }
 

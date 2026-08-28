@@ -40,6 +40,10 @@ export const api = {
   geoReverse: (lat, lng) => req(`/geocode/reverse?lat=${lat}&lng=${lng}`),
   safeHarbors: (lat, lng) => req(`/safe-harbors?lat=${lat}&lng=${lng}`),
   essentials: (lat, lng) => req(`/essentials?lat=${lat}&lng=${lng}`),
+  safeHarborsRoute: (encoded_polyline) =>
+    req("/safe-harbors/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
+  essentialsRoute: (encoded_polyline) =>
+    req("/essentials/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
   reportIncident: (body) =>
     req("/incidents", { method: "POST", body: JSON.stringify(body) }),
   webAdvisories: (body) =>

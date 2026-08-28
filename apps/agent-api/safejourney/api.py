@@ -27,7 +27,12 @@ from .services.agentic import plan_reasoning
 from .services.planner import plan_and_score, plan_journey
 from .services.prep import readiness
 from .services.monitor import dispatch as monitor_dispatch, evaluate_trip
-from .tools.places import find_safe_harbors, find_essentials
+from .tools.places import (
+    find_safe_harbors,
+    find_essentials,
+    find_safe_harbors_route,
+    find_essentials_route,
+)
 from .tools.mobility import mobility_options
 from .tools.geocode import geocode_search, geocode_resolve, reverse_geocode
 
@@ -174,6 +179,27 @@ def geocode_reverse_ep(lat: float, lng: float) -> dict:
 @app.get("/safe-harbors")
 def safe_harbors(lat: float, lng: float) -> dict:
     return {"harbors": find_safe_harbors(lat, lng)}
+
+
+class RoutePlacesReq(BaseModel):
+    encoded_polyline: str
+
+
+@app.post("/safe-harbors/route")
+def safe_harbors_route(req: RoutePlacesReq) -> dict:
+    """Safe harbours along the WHOLE route corridor, so a traveller can reach the nearest one
+    from anywhere on the path — not just near the start/end."""
+    from safejourney_shared.geo import decode_polyline
+
+    return {"harbors": find_safe_harbors_route(decode_polyline(req.encoded_polyline))}
+
+
+@app.post("/essentials/route")
+def essentials_route(req: RoutePlacesReq) -> dict:
+    """Journey essentials (pharmacy/fuel/ATM/store) along the whole route corridor."""
+    from safejourney_shared.geo import decode_polyline
+
+    return {"essentials": find_essentials_route(decode_polyline(req.encoded_polyline))}
 
 
 @app.get("/mobility")
