@@ -98,17 +98,20 @@ def sample_polyline(
         return []
     out: list[tuple[float, float, float]] = [(points[0][0], points[0][1], 0.0)]
     dist_along = 0.0
-    carried = 0.0
+    next_sample = step_m  # cumulative distance of the next point to emit
     for (lat1, lng1), (lat2, lng2) in zip(points, points[1:]):
         seg = haversine_m(lat1, lng1, lat2, lng2)
         if seg == 0:
             continue
-        pos = carried
-        while pos + step_m <= seg:
-            pos += step_m
-            t = pos / seg
-            out.append((lat1 + (lat2 - lat1) * t, lng1 + (lng2 - lng1) * t, dist_along + pos))
-        carried = (carried + seg) % step_m if seg >= step_m else carried + seg
+        seg_start = dist_along
+        # Emit every step_m boundary that falls inside this segment. Tracking the boundary in
+        # CUMULATIVE distance (not a per-segment carry) is what makes this work on dense routes
+        # whose individual segments are shorter than step_m — the previous carry never reset and
+        # so almost no mid-route points were emitted, starving every corridor hazard lookup.
+        while next_sample <= dist_along + seg:
+            t = (next_sample - seg_start) / seg
+            out.append((lat1 + (lat2 - lat1) * t, lng1 + (lng2 - lng1) * t, next_sample))
+            next_sample += step_m
         dist_along += seg
     # Always include the final point.
     last = points[-1]
