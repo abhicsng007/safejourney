@@ -67,7 +67,7 @@ def narrate_alert(action: str, hazard: dict, mode: str, base_message: str) -> Op
     return generate(prompt, system=_NARRATOR_SYSTEM, max_tokens=120)
 
 
-def generate_json(prompt: str, system: str = "", max_tokens: int = 400) -> Optional[dict]:
+def generate_json(prompt: str, system: str = "", max_tokens: int = 512) -> Optional[dict]:
     """Ask Gemini for a single JSON object and parse it. Returns None on any failure so
     callers always fall back to deterministic logic."""
     client = _client()
@@ -82,6 +82,7 @@ def generate_json(prompt: str, system: str = "", max_tokens: int = 400) -> Optio
             max_output_tokens=max_tokens,
             temperature=0.2,
             response_mime_type="application/json",
+            **_thinking_off(types),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         raw = (resp.text or "").strip()
@@ -93,7 +94,22 @@ def generate_json(prompt: str, system: str = "", max_tokens: int = 400) -> Optio
         return None
 
 
-def generate_with_search(prompt: str, system: str = "", max_tokens: int = 700) -> Optional[str]:
+def _thinking_off(types) -> dict:
+    """thinking_config that disables model 'thinking' when the SDK/model supports it.
+
+    gemini-2.5-* are thinking models: with a small max_output_tokens the internal thinking
+    tokens consume the whole budget and the actual answer (our JSON) comes back truncated or
+    empty. For these extraction tasks we don't need thinking, so cap it to 0 where available.
+    Returned as kwargs so it's simply omitted on SDKs/models that don't support it."""
+    if hasattr(types, "ThinkingConfig"):
+        try:
+            return {"thinking_config": types.ThinkingConfig(thinking_budget=0)}
+        except Exception:
+            return {}
+    return {}
+
+
+def generate_with_search(prompt: str, system: str = "", max_tokens: int = 2048) -> Optional[str]:
     """Generate grounded in live Google Search results (Vertex 'Grounding with Google Search').
     Returns the model's text (which we ask to be JSON) or None on any failure."""
     client = _client()
@@ -109,6 +125,7 @@ def generate_with_search(prompt: str, system: str = "", max_tokens: int = 700) -
             tools=[search_tool],
             max_output_tokens=max_tokens,
             temperature=0.2,
+            **_thinking_off(types),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         return (resp.text or "").strip() or None
