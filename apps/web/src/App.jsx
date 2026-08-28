@@ -536,6 +536,7 @@ export default function App() {
         destination={phase !== "active" ? destination : trip?.destination}
         position={phase === "active" ? position : null}
         onMapClick={setting ? onMapClick : null}
+        scanning={phase === "plan" && busy}
         fitKey={fitKey}
         focusPoint={focusPoint}
       />

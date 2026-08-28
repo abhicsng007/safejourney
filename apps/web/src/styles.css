@@ -131,6 +131,73 @@ button {
     opacity: 0;
   }
 }
+/* Radar sweep shown on the map while routes are being scanned. The marker element is a
+   zero-size point (MapLibre anchors it at the origin); everything is centered on it. */
+.radar {
+  position: relative;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.radar-core {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--beacon);
+  box-shadow: 0 0 12px 2px rgba(37, 199, 220, 0.8);
+}
+.radar-wave {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  border: 2px solid var(--beacon);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  animation: radar-wave 2.4s ease-out infinite;
+}
+.radar-wave:nth-child(3) {
+  animation-delay: 0.8s;
+}
+.radar-wave:nth-child(4) {
+  animation-delay: 1.6s;
+}
+.radar-sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 300px;
+  height: 300px;
+  margin: -150px 0 0 -150px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(37, 199, 220, 0.35),
+    rgba(37, 199, 220, 0) 40%
+  );
+  animation: radar-spin 1.8s linear infinite;
+}
+@keyframes radar-wave {
+  0% {
+    width: 16px;
+    height: 16px;
+    opacity: 0.75;
+  }
+  100% {
+    width: 300px;
+    height: 300px;
+    opacity: 0;
+  }
+}
+@keyframes radar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .brand h1 {
   font-size: 20px;
   font-weight: 800;

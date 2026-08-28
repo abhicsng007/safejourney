@@ -41,6 +41,7 @@ export default function MapView({
   destination,
   position,
   onMapClick,
+  scanning,
   fitKey,
   focusPoint,
 }) {
@@ -228,6 +229,40 @@ export default function MapView({
       markersRef.current.push(m);
     }
   }, [origin, destination, position, harbors, essentials, webAdvisories]);
+
+  // radar sweep over the origin while routes are being scanned
+  const radarRef = useRef(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const clear = () => {
+      if (radarRef.current) {
+        radarRef.current.remove();
+        radarRef.current = null;
+      }
+    };
+    if (!scanning || !origin) {
+      clear();
+      return;
+    }
+    const apply = () => {
+      clear();
+      const el = document.createElement("div");
+      el.className = "radar";
+      el.innerHTML =
+        '<div class="radar-sweep"></div>' +
+        '<span class="radar-wave"></span><span class="radar-wave"></span><span class="radar-wave"></span>' +
+        '<div class="radar-core"></div>';
+      radarRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([origin.lng, origin.lat])
+        .addTo(map);
+      // Center the search so the sweep is in view.
+      map.easeTo({ center: [origin.lng, origin.lat], duration: 600, essential: true });
+    };
+    if (map._sjReady) apply();
+    else map.once("sjready", apply);
+    return clear;
+  }, [scanning, origin]);
 
   // fly to a just-picked location (search result / GPS) for a responsive "search" feel
   useEffect(() => {
