@@ -25,6 +25,7 @@ def clean_repo(monkeypatch):
     monkeypatch.setattr(hazard_scan, "disaster_hazards", lambda pts, raining=False: [])
     monkeypatch.setattr(hazard_scan, "roadwork_hazards", lambda pts, max_items=12: [])
     monkeypatch.setattr(hazard_scan, "unlit_hazards", lambda pts: [])
+    monkeypatch.setattr(hazard_scan, "osm_hazards", lambda pts: [])
     monkeypatch.setattr(hazard_scan, "sharp_turn_hazards", lambda pts: [])
     monkeypatch.setattr(hazard_scan, "blackspot_hazards", lambda pts, max_offset_m=200.0: [])
     yield

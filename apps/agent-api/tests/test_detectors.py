@@ -122,3 +122,41 @@ def test_delete_expired_incidents(monkeypatch):
     deleted = repo.delete_expired_incidents(now)
     assert deleted == 1
     assert len(repo._incidents) == 1  # the fresh pothole survives
+
+
+# ---- OSM extra hazards (#2) ----
+
+def test_osm_tag_mapping():
+    from safejourney.tools.osm_hazards import _hazard_from_element
+
+    lc = _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"railway": "level_crossing"}})
+    assert lc.type == HazardType.RAIL_CROSSING and lc.severity == Severity.MODERATE
+
+    cv = _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"hazard": "curve"}})
+    assert cv.type == HazardType.SHARP_TURN
+
+    fr = _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"hazard": "falling_rocks"}})
+    assert fr.type == HazardType.LANDSLIDE
+
+    sb = _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"traffic_calming": "bump"}})
+    assert sb.type == HazardType.POTHOLE
+
+    assert _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"highway": "residential"}}) is None
+
+
+# ---- GDACS regional snap (#4 fix) ----
+
+def test_gdacs_snapped_onto_route_and_scaled(monkeypatch):
+    import safejourney.tools.disaster as d
+
+    route = [(12.90, 77.60), (12.95, 77.65), (13.00, 77.70)]
+    fake = {"features": [{"geometry": {"coordinates": [78.20, 13.30]},  # ~64 km off
+                          "properties": {"eventtype": "FL", "alertlevel": "Red", "name": "Test Flood"}}]}
+    monkeypatch.setattr(d, "get_json", lambda *a, **k: fake)
+    hz = [h for h in d.disaster_hazards(route, raining=False) if h.source == "gdacs"]
+    assert hz, "a Red flood within 120 km must be retained"
+    h = hz[0]
+    assert (h.lat, h.lng) in route          # snapped to the route's closest approach
+    assert h.offset_m == 0.0                # so it survives the corridor offset filter
+    assert h.severity == Severity.MODERATE  # Red(critical) stepped down twice for >60 km
+    assert "km from your route" in h.description

@@ -25,6 +25,7 @@ from .incident import incident_hazards
 from .geometry_hazards import sharp_turn_hazards
 from .lighting import unlit_hazards
 from .blackspot import blackspot_hazards
+from .osm_hazards import osm_hazards
 
 _WET_TYPES = {HazardType.FLOOD, HazardType.STORM, HazardType.WATERLOGGING, HazardType.LIGHTNING}
 
@@ -68,7 +69,7 @@ def scan_corridor(
 
     # Run independent network sources in parallel — the tick stays fast even with several feeds.
     hazards: list[Hazard] = []
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         f_weather = pool.submit(weather_hazards, sampled)
         f_roadwork = pool.submit(roadwork_hazards, sampled) if include_roadwork else None
         f_incident = (
@@ -76,6 +77,7 @@ def scan_corridor(
             if include_incidents else None
         )
         f_unlit = pool.submit(unlit_hazards, sampled) if include_roadwork else None
+        f_osm = pool.submit(osm_hazards, sampled) if include_roadwork else None
 
         weather = f_weather.result() or []
         hazards += weather
@@ -85,6 +87,8 @@ def scan_corridor(
             hazards += f_incident.result() or []
         if f_unlit:
             hazards += f_unlit.result() or []
+        if f_osm:
+            hazards += f_osm.result() or []
 
         # Disaster/GLOF reasoning depends on whether it's currently wet along the route.
         if include_disaster:

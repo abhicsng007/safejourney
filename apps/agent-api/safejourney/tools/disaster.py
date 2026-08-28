@@ -35,6 +35,16 @@ _GDACS_TYPE = {
 
 _ALERT_SEVERITY = {"Red": Severity.CRITICAL, "Orange": Severity.HIGH, "Green": Severity.MODERATE}
 
+_SEV_ORDER = [Severity.LOW, Severity.MODERATE, Severity.HIGH, Severity.CRITICAL]
+
+
+def _scale_by_distance(sev: Severity, dist_m: float) -> Severity:
+    """A regional event far from the route is a weaker signal — step its severity down."""
+    if sev not in _SEV_ORDER or dist_m <= 25_000:
+        return sev
+    steps = 1 if dist_m <= 60_000 else 2
+    return _SEV_ORDER[max(0, _SEV_ORDER.index(sev) - steps)]
+
 
 def _glof_hazards(points: list[tuple[float, float]], raining: bool) -> list[Hazard]:
     out: list[Hazard] = []
@@ -76,11 +86,18 @@ def disaster_hazards(points: list[tuple[float, float]], raining: bool = False) -
         if etype not in _GDACS_TYPE:
             continue
         htype, label = _GDACS_TYPE[etype]
-        sev = _ALERT_SEVERITY.get(props.get("alertlevel", "Orange"), Severity.HIGH)
-        # Only surface if reasonably near the route (event footprints are large).
-        near = min((haversine_m(lat, lng, elat, elng) for lat, lng in points), default=1e12)
+        base = _ALERT_SEVERITY.get(props.get("alertlevel", "Orange"), Severity.HIGH)
+        # Snap the regional event to the route's closest approach so it isn't dropped as
+        # "off the line" (event footprints are large); state the real distance and step the
+        # severity down with distance so a far event doesn't dominate the score.
+        nearest = min(points, key=lambda p: haversine_m(p[0], p[1], elat, elng), default=None)
+        if nearest is None:
+            continue
+        near = haversine_m(nearest[0], nearest[1], elat, elng)
         if near <= 120_000:  # 120 km
             name = props.get("name", label)
-            out.append(Hazard(htype, sev, elat, elng, "gdacs",
-                              f"{label}: {name} (~{near/1000:.0f} km from route)."))
+            sev = _scale_by_distance(base, near)
+            out.append(Hazard(htype, sev, nearest[0], nearest[1], "gdacs",
+                              f"{label}: {name} — regional advisory, ~{near/1000:.0f} km from your route.",
+                              offset_m=0.0))
     return out
