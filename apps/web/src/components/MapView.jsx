@@ -40,6 +40,7 @@ export default function MapView({
   position,
   onMapClick,
   fitKey,
+  focusPoint,
 }) {
   const ref = useRef(null);
   const mapRef = useRef(null);
@@ -172,6 +173,16 @@ export default function MapView({
     if (position) add([position.lng, position.lat], marker("#ffffff", "●", 20));
     harbors.forEach((h) => add([h.lng, h.lat], marker("#f0b429", "🏠", 24)));
   }, [origin, destination, position, harbors]);
+
+  // fly to a just-picked location (search result / GPS) for a responsive "search" feel
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusPoint) return;
+    const apply = () =>
+      map.flyTo({ center: [focusPoint.lng, focusPoint.lat], zoom: 15, duration: 900, essential: true });
+    if (map._sjReady) apply();
+    else map.once("sjready", apply);
+  }, [focusPoint]);
 
   // fit bounds
   useEffect(() => {

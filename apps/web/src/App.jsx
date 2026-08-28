@@ -63,6 +63,7 @@ export default function App() {
   const [status, setStatus] = useState({ online: null, msg: "Checking backend…" });
   const [busy, setBusy] = useState(false);
   const [fitKey, setFitKey] = useState(0);
+  const [focusPoint, setFocusPoint] = useState(null);
   const seenAlerts = useRef(new Set());
 
   // health check
@@ -102,6 +103,7 @@ export default function App() {
       if (which === "origin") { setOrigin(ll); setOriginLabel(coordLabel); }
       else if (which === "destination") { setDestination(ll); setDestLabel(coordLabel); }
       setSetting(null);
+      setFocusPoint({ lat: ll.lat, lng: ll.lng });
       // Upgrade the coord label to a real place name in the background.
       api.geoReverse(ll.lat, ll.lng).then((d) => {
         if (!d?.label) return;
@@ -124,13 +126,13 @@ export default function App() {
   const pickOrigin = useCallback((loc) => {
     setOrigin({ lat: loc.lat, lng: loc.lng });
     setOriginLabel(loc.label);
-    setFitKey((k) => k + 1);
+    setFocusPoint({ lat: loc.lat, lng: loc.lng }); // fly to it
   }, []);
 
   const pickDestination = useCallback((loc) => {
     setDestination({ lat: loc.lat, lng: loc.lng });
     setDestLabel(loc.label);
-    setFitKey((k) => k + 1);
+    setFocusPoint({ lat: loc.lat, lng: loc.lng }); // fly to it
   }, []);
 
   async function findRoute() {
@@ -418,6 +420,7 @@ export default function App() {
         position={phase === "active" ? position : null}
         onMapClick={setting ? onMapClick : null}
         fitKey={fitKey}
+        focusPoint={focusPoint}
       />
 
       <div className="toasts">
