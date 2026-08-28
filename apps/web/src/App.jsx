@@ -43,6 +43,8 @@ export default function App() {
   const [presetIdx, setPresetIdx] = useState(0);
   const [origin, setOrigin] = useState(PRESETS[0].o);
   const [destination, setDestination] = useState(PRESETS[0].d);
+  const [originLabel, setOriginLabel] = useState(PRESETS[0].name);
+  const [destLabel, setDestLabel] = useState("Destination");
   const [setting, setSetting] = useState(null); // 'origin' | 'destination'
 
   const [plan, setPlan] = useState(null);
@@ -95,9 +97,17 @@ export default function App() {
 
   const onMapClick = useCallback(
     (ll) => {
-      if (setting === "origin") setOrigin(ll);
-      else if (setting === "destination") setDestination(ll);
+      const coordLabel = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`;
+      const which = setting;
+      if (which === "origin") { setOrigin(ll); setOriginLabel(coordLabel); }
+      else if (which === "destination") { setDestination(ll); setDestLabel(coordLabel); }
       setSetting(null);
+      // Upgrade the coord label to a real place name in the background.
+      api.geoReverse(ll.lat, ll.lng).then((d) => {
+        if (!d?.label) return;
+        if (which === "origin") setOriginLabel(d.label);
+        else if (which === "destination") setDestLabel(d.label);
+      }).catch(() => {});
     },
     [setting]
   );
@@ -106,8 +116,22 @@ export default function App() {
     setPresetIdx(i);
     setOrigin(PRESETS[i].o);
     setDestination(PRESETS[i].d);
+    setOriginLabel(PRESETS[i].name);
+    setDestLabel("Destination");
     setFitKey((k) => k + 1);
   }
+
+  const pickOrigin = useCallback((loc) => {
+    setOrigin({ lat: loc.lat, lng: loc.lng });
+    setOriginLabel(loc.label);
+    setFitKey((k) => k + 1);
+  }, []);
+
+  const pickDestination = useCallback((loc) => {
+    setDestination({ lat: loc.lat, lng: loc.lng });
+    setDestLabel(loc.label);
+    setFitKey((k) => k + 1);
+  }, []);
 
   async function findRoute() {
     if (!origin || !destination) return;
@@ -118,8 +142,8 @@ export default function App() {
         origin,
         destination,
         mode,
-        origin_label: PRESETS[presetIdx]?.name || "Origin",
-        destination_label: "Destination",
+        origin_label: originLabel || "Origin",
+        destination_label: destLabel || "Destination",
       });
       setTrip(res.trip);
       setPlan(res.plan);
@@ -324,6 +348,10 @@ export default function App() {
               setSetting={setSetting}
               origin={origin}
               destination={destination}
+              originLabel={originLabel}
+              destLabel={destLabel}
+              pickOrigin={pickOrigin}
+              pickDestination={pickDestination}
               findRoute={findRoute}
               busy={busy}
               online={status.online}
@@ -406,31 +434,153 @@ export default function App() {
 
 /* ---------------- panels ---------------- */
 
-function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting, origin, destination, findRoute, busy, online }) {
+function LocationInput({ label, valueLabel, placeholder, center, onPick, allowGps }) {
+  const [q, setQ] = useState(valueLabel || "");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const boxRef = useRef(null);
+  const tRef = useRef(null);
+
+  useEffect(() => {
+    setQ(valueLabel || "");
+  }, [valueLabel]);
+
+  useEffect(() => {
+    function onDoc(e) {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  function onChange(v) {
+    setQ(v);
+    clearTimeout(tRef.current);
+    if (v.trim().length < 3) {
+      setResults([]);
+      setOpen(false);
+      return;
+    }
+    setLoading(true);
+    tRef.current = setTimeout(async () => {
+      try {
+        const res = await api.geoSearch(v.trim(), center?.lat, center?.lng);
+        setResults(res.results || []);
+        setOpen(true);
+      } catch {
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 280);
+  }
+
+  async function pick(r) {
+    setOpen(false);
+    let loc = r;
+    if (r.lat == null) {
+      try {
+        loc = await api.geoResolve(r.place_id);
+      } catch {
+        return;
+      }
+    }
+    setQ(loc.label);
+    onPick({ lat: loc.lat, lng: loc.lng, label: loc.label });
+  }
+
+  function useGps() {
+    if (!("geolocation" in navigator)) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        let lbl = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        try {
+          const d = await api.geoReverse(lat, lng);
+          lbl = d.label || lbl;
+        } catch {}
+        setQ(lbl);
+        onPick({ lat, lng, label: lbl });
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }
+
+  return (
+    <div className="field loc-field" ref={boxRef}>
+      <label>{label}</label>
+      <div className="loc-row">
+        <input
+          value={q}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => results.length > 0 && setOpen(true)}
+        />
+        {allowGps && (
+          <button className="loc-gps" title="Use my location" onClick={useGps} disabled={locating}>
+            {locating ? "…" : "📍"}
+          </button>
+        )}
+        {open && results.length > 0 && (
+          <div className="loc-list">
+            {results.map((r, i) => (
+              <button className="loc-item" key={i} onClick={() => pick(r)}>
+                <span className="loc-pin">📍</span>
+                <span className="loc-label">{r.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {loading && <div className="loc-loading">searching…</div>}
+    </div>
+  );
+}
+
+function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting, origin, destination, originLabel, destLabel, pickOrigin, pickDestination, findRoute, busy, online }) {
   return (
     <>
       <div className="hint">
-        Pick a journey and mode. SafeJourney checks every candidate route for floods,
-        lightning, live wires, road works and upstream calamity — then recommends the safest.
+        Search a start and destination, or use your location. SafeJourney checks every
+        candidate route for floods, lightning, live wires, road works and upstream calamity —
+        then recommends the safest.
       </div>
 
+      <LocationInput
+        label="Start"
+        valueLabel={originLabel}
+        placeholder="Search a place, or tap 📍 for your location"
+        center={origin}
+        onPick={pickOrigin}
+        allowGps
+      />
+      <LocationInput
+        label="Destination"
+        valueLabel={destLabel === "Destination" ? "" : destLabel}
+        placeholder="Search your destination"
+        center={origin}
+        onPick={pickDestination}
+      />
+
       <div className="field">
-        <label>Demo journey</label>
+        <span className="section-label">Or a demo journey / tap the map</span>
         <select value={presetIdx} onChange={(e) => applyPreset(Number(e.target.value))}>
           {PRESETS.map((p, i) => (
             <option value={i} key={i}>{p.name}</option>
           ))}
         </select>
-      </div>
-
-      <div className="field">
-        <span className="section-label">Or set points on the map</span>
-        <div className="btn-row" style={{ marginTop: 6 }}>
+        <div className="btn-row" style={{ marginTop: 8 }}>
           <button className={`btn ${setting === "origin" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSetting("origin")}>
-            {setting === "origin" ? "Tap map…" : "Set start (A)"}
+            {setting === "origin" ? "Tap map…" : "Pin start"}
           </button>
           <button className={`btn ${setting === "destination" ? "btn-primary" : "btn-ghost"}`} onClick={() => setSetting("destination")}>
-            {setting === "destination" ? "Tap map…" : "Set end (B)"}
+            {setting === "destination" ? "Tap map…" : "Pin end"}
           </button>
         </div>
       </div>

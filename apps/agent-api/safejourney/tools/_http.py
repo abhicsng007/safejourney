@@ -9,13 +9,21 @@ from __future__ import annotations
 from typing import Any, Optional
 
 
-def get_json(url: str, params: Optional[dict] = None, timeout: float = 6.0) -> Optional[Any]:
+def get_json(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: float = 6.0,
+    headers: Optional[dict] = None,
+) -> Optional[Any]:
     try:
         import httpx  # lazy so the package imports even without httpx installed
     except Exception:
         return None
     try:
-        r = httpx.get(url, params=params, timeout=timeout, headers={"User-Agent": "SafeJourney/0.1"})
+        hdrs = {"User-Agent": "SafeJourney/0.1"}
+        if headers:
+            hdrs.update(headers)
+        r = httpx.get(url, params=params, timeout=timeout, headers=hdrs)
         if r.status_code == 200:
             return r.json()
         return None

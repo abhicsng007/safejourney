@@ -34,6 +34,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ tripId, type, severity, at_fraction }),
     }),
+  geoSearch: (q, lat, lng) =>
+    req(`/geocode/search?q=${encodeURIComponent(q)}` + (lat != null ? `&lat=${lat}&lng=${lng}` : "")),
+  geoResolve: (placeId) => req(`/geocode/resolve?place_id=${encodeURIComponent(placeId)}`),
+  geoReverse: (lat, lng) => req(`/geocode/reverse?lat=${lat}&lng=${lng}`),
   safeHarbors: (lat, lng) => req(`/safe-harbors?lat=${lat}&lng=${lng}`),
   mobility: (lat, lng, dlat, dlng) =>
     req(`/mobility?lat=${lat}&lng=${lng}` + (dlat != null ? `&dlat=${dlat}&dlng=${dlng}` : "")),

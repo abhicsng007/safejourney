@@ -786,6 +786,86 @@ input:focus {
   50% { opacity: 0.45; }
 }
 
+/* ---------- location autocomplete ---------- */
+.loc-field {
+  position: relative;
+}
+.loc-row {
+  position: relative;
+  display: flex;
+  gap: 7px;
+  align-items: stretch;
+}
+.loc-row input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13.5px;
+}
+.loc-row input:focus {
+  outline: none;
+  border-color: var(--beacon);
+}
+.loc-gps {
+  flex: none;
+  width: 42px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  font-size: 16px;
+  color: var(--ink);
+}
+.loc-gps:hover {
+  border-color: var(--beacon);
+}
+.loc-list {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.loc-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.loc-item:last-child {
+  border-bottom: none;
+}
+.loc-item:hover {
+  background: var(--surface-3);
+}
+.loc-item .loc-pin {
+  flex: none;
+  opacity: 0.7;
+}
+.loc-loading {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin-top: 4px;
+}
+
 /* ---------- mobility alternatives ---------- */
 .mobility {
   display: flex;

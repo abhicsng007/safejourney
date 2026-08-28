@@ -29,6 +29,7 @@ from .services.prep import readiness
 from .services.monitor import dispatch as monitor_dispatch, evaluate_trip
 from .tools.places import find_safe_harbors
 from .tools.mobility import mobility_options
+from .tools.geocode import geocode_search, geocode_resolve, reverse_geocode
 
 
 app = FastAPI(title="SafeJourney API", version="0.1.0")
@@ -140,6 +141,27 @@ def prep(req: PrepReq) -> dict:
         req.risk_tolerance,
     )
     return {"prep": readiness(plan, req.mode), "plan": plan}
+
+
+@app.get("/geocode/search")
+def geocode_search_ep(q: str, lat: float | None = None, lng: float | None = None) -> dict:
+    """Type-ahead place search (Google Places, OSM fallback). Returns ranked candidates."""
+    return {"results": geocode_search(q, lat, lng)}
+
+
+@app.get("/geocode/resolve")
+def geocode_resolve_ep(place_id: str) -> dict:
+    """Resolve a Google place_id to coordinates (OSM results already carry lat/lng)."""
+    r = geocode_resolve(place_id)
+    if not r:
+        raise HTTPException(404, "could not resolve place")
+    return r
+
+
+@app.get("/geocode/reverse")
+def geocode_reverse_ep(lat: float, lng: float) -> dict:
+    """Reverse-geocode a GPS fix into a human label for the 'locate me' button."""
+    return reverse_geocode(lat, lng)
 
 
 @app.get("/safe-harbors")
