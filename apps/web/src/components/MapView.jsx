@@ -74,6 +74,21 @@ export default function MapView({
           "line-opacity": ["case", ["get", "selected"], 0.95, 0.5],
         },
       });
+      // Painted route stretches where a hazard sits — a thick, glowing overlay on top of the
+      // route line so the traveller sees WHICH part of the path is affected, not just a dot.
+      map.addSource("hazard-seg", { type: "geojson", data: fc([]) });
+      map.addLayer({
+        id: "hazard-seg-line",
+        type: "line",
+        source: "hazard-seg",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": ["case", ["get", "selected"], 12, 9],
+          "line-opacity": 0.55,
+          "line-blur": 1.5,
+        },
+      });
       map.addSource("hazards", { type: "geojson", data: fc([]) });
       map.addLayer({
         id: "hazards-halo",
@@ -162,6 +177,24 @@ export default function MapView({
     else map.once("sjready", apply);
   }, [hazards]);
 
+  // paint the route stretches where hazards / web advisories sit
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getSource) return;
+    const apply = () => {
+      const coords = currentRouteCoords({ mapMode, activePolyline, routes, selectedRouteId });
+      const items = [
+        ...hazards.map((h) => ({ lat: h.lat, lng: h.lng, color: SEVERITY_COLOR[h.severity] || "#f0b429" })),
+        ...webAdvisories.map((a) => ({ lat: a.lat, lng: a.lng, color: "#c9a227" })),
+      ];
+      const feats = hazardSegments(coords, items);
+      const src = map.getSource("hazard-seg");
+      if (src) src.setData(fc(feats));
+    };
+    if (map._sjReady) apply();
+    else map.once("sjready", apply);
+  }, [hazards, webAdvisories, routes, selectedRouteId, activePolyline, mapMode]);
+
   // markers (origin/dest/position/harbors)
   useEffect(() => {
     const map = mapRef.current;
@@ -237,6 +270,58 @@ export default function MapView({
 
 function fmtDist(m) {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+// The route currently drawn on the map (active trip line, else the selected candidate).
+function currentRouteCoords({ mapMode, activePolyline, routes, selectedRouteId }) {
+  if (mapMode === "active" && activePolyline) return decodePolyline(activePolyline);
+  const r = routes.find((x) => x.route_id === selectedRouteId) || routes[0];
+  return r ? decodePolyline(r.encoded_polyline) : [];
+}
+
+function haversineM(aLat, aLng, bLat, bLng) {
+  const R = 6371000, toR = Math.PI / 180;
+  const dphi = (bLat - aLat) * toR, dl = (bLng - aLng) * toR;
+  const s =
+    Math.sin(dphi / 2) ** 2 +
+    Math.cos(aLat * toR) * Math.cos(bLat * toR) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+// For each hazard, paint the ~half-km of route around its closest point on the line.
+function hazardSegments(coords, items, halfLenM = 260, maxOffM = 600) {
+  if (coords.length < 2) return [];
+  const feats = [];
+  for (const it of items) {
+    if (it.lat == null || it.lng == null) continue;
+    // nearest route vertex (coords are [lng, lat])
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const d = haversineM(it.lat, it.lng, coords[i][1], coords[i][0]);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    if (bd > maxOffM) continue; // not really on this route — don't paint
+    // walk outward from bi accumulating ~halfLenM of route on each side
+    let lo = bi, hi = bi, acc = 0;
+    while (lo > 0 && acc < halfLenM) {
+      acc += haversineM(coords[lo][1], coords[lo][0], coords[lo - 1][1], coords[lo - 1][0]);
+      lo--;
+    }
+    acc = 0;
+    while (hi < coords.length - 1 && acc < halfLenM) {
+      acc += haversineM(coords[hi][1], coords[hi][0], coords[hi + 1][1], coords[hi + 1][0]);
+      hi++;
+    }
+    const seg = coords.slice(lo, hi + 1);
+    if (seg.length >= 2) {
+      feats.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: seg },
+        properties: { color: it.color, selected: true },
+      });
+    }
+  }
+  return feats;
 }
 function fc(features) {
   return { type: "FeatureCollection", features };
