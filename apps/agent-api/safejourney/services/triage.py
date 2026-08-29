@@ -112,7 +112,7 @@ def triage_report(text: str) -> dict:
                 "confidence": 0.0, "source": "empty"}
 
     s = get_settings()
-    if s.gemini_available:
+    if s.gemma_api_key:
         try:
             from ..agents.llm import triage_report_gemma
 

@@ -211,6 +211,22 @@ _DECISION_SYSTEM = (
 )
 
 
+@lru_cache
+def _gemma_client():
+    """A Gemini-API (AI Studio) client for Gemma. Gemma is not a Vertex publisher model for
+    generateContent, so it needs the API-key path even when Gemini itself runs on Vertex."""
+    s = get_settings()
+    if not s.gemma_api_key:
+        return None
+    try:
+        from google import genai
+
+        return genai.Client(api_key=s.gemma_api_key)
+    except Exception as e:  # pragma: no cover
+        print(f"[llm] gemma client init failed ({e})")
+        return None
+
+
 def triage_report_gemma(
     text: str,
     allowed_types: list[str],
@@ -223,7 +239,7 @@ def triage_report_gemma(
     Gemma on the Gemini API doesn't accept a system instruction, JSON mime mode, or a thinking
     config, so this call is deliberately self-contained: everything is in the user prompt and
     the JSON is parsed leniently."""
-    client = _client()
+    client = _gemma_client()
     if client is None:
         return None
     s = get_settings()

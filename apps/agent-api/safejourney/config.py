@@ -31,7 +31,14 @@ class Settings:
     # Gemma — a small, cheap open model used for the high-volume crowd-report triage (turning
     # free-text/voice hazard reports into the structured hazard schema). Gemini stays reserved
     # for low-volume, high-stakes reasoning; Gemma absorbs the classification firehose.
+    # Gemma is NOT served as a Vertex publisher model for generateContent, so it's called via
+    # the Gemini API (AI Studio) with an API key — independent of the Vertex path Gemini uses.
     gemma_model: str = os.getenv("GEMMA_MODEL", "gemma-3-12b-it")
+    gemma_api_key: str = (
+        os.getenv("GEMMA_API_KEY", "")
+        or os.getenv("GOOGLE_API_KEY", "")
+        or os.getenv("GEMINI_API_KEY", "")
+    )
 
     # --- Maps Platform ---
     maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
@@ -64,6 +71,7 @@ class Settings:
         return {
             "gemini_model": self.gemini_model,
             "gemma_model": self.gemma_model,
+            "gemma_enabled": bool(self.gemma_api_key),
             "use_vertex": self.use_vertex,
             "gemini_available": self.gemini_available,
             "maps_key": bool(self.maps_api_key),
