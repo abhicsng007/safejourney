@@ -124,6 +124,13 @@ class InMemoryRepo:
                 self._incidents.pop(i, None)
         return len(stale)
 
+    def delete_all_incidents(self) -> int:
+        """Wipe every incident — a clean slate for a fresh demo run. Returns how many."""
+        with self._lock:
+            n = len(self._incidents)
+            self._incidents.clear()
+        return n
+
     # --- hazard cache (geohash+type keyed, TTL) ---
     def cache_get(self, key: str) -> Optional[dict]:
         item = self._cache.get(key)
@@ -226,6 +233,18 @@ class FirestoreRepo(InMemoryRepo):
         batch = self.db.batch()
         count = 0
         for d in q.stream():
+            batch.delete(d.reference)
+            count += 1
+        if count:
+            batch.commit()
+        return count
+
+    def delete_all_incidents(self) -> int:
+        """Wipe every incident — a clean slate for a fresh demo run. Returns how many."""
+        col = self.db.collection("incidents")
+        count = 0
+        batch = self.db.batch()
+        for d in col.limit(500).stream():
             batch.delete(d.reference)
             count += 1
         if count:

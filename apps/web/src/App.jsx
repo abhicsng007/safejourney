@@ -510,6 +510,17 @@ export default function App() {
     }
   }
 
+  async function resetDemo() {
+    try {
+      const res = await api.resetDemo();
+      seenAlerts.current = new Set(); // let a re-injected hazard alert again
+      pushToast("Demo reset", `Cleared ${res.cleared_incidents || 0} test hazard(s) — clean slate for a fresh run.`, "#33d08c");
+      if (trip) await refresh(trip.id, true);
+    } catch (e) {
+      pushToast("Reset failed", String(e.message || e), "#ff6150");
+    }
+  }
+
   async function advance(f) {
     if (!trip) return;
     const coords = decodePolyline(trip.encoded_polyline);
@@ -741,6 +752,7 @@ export default function App() {
               pickOrigin={pickOrigin}
               pickDestination={pickDestination}
               findRoute={findRoute}
+              resetDemo={resetDemo}
               busy={busy}
               online={status.online}
             />
@@ -791,6 +803,7 @@ export default function App() {
               essentials={essentials}
               reportHazard={reportHazard}
               reportHazardText={reportHazardText}
+              resetDemo={resetDemo}
               mobility={mobility}
               gpsOn={gpsOn}
               toggleGps={() => setGpsOn((v) => !v)}
@@ -950,7 +963,7 @@ function LocationInput({ label, valueLabel, placeholder, center, onPick, allowGp
   );
 }
 
-function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting, origin, destination, originLabel, destLabel, pickOrigin, pickDestination, findRoute, busy, online }) {
+function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting, origin, destination, originLabel, destLabel, pickOrigin, pickDestination, findRoute, resetDemo, busy, online }) {
   return (
     <>
       <div className="hint">
@@ -1006,6 +1019,9 @@ function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting,
 
       <button className="btn btn-primary" onClick={findRoute} disabled={busy || online === false}>
         {busy ? "Scanning routes…" : "Find the safest route"}
+      </button>
+      <button className="btn btn-ghost" style={{ marginTop: 8, fontSize: 12 }} onClick={resetDemo} disabled={online === false} title="Clear leftover test hazards from previous runs">
+        ↺ Reset demo data
       </button>
       {online === false && (
         <div className="hint" style={{ color: "#ffb3aa" }}>
@@ -1581,7 +1597,7 @@ function NaturalReport({ onReport }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, reportHazardText, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, reportHazardText, resetDemo, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -1635,7 +1651,10 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
       </div>
 
       <div className="divider" />
-      <span className="section-label">Simulate a hazard (demo)</span>
+      <div className="prep-head">
+        <span className="section-label">Simulate a hazard (demo)</span>
+        <button className="gps-toggle" onClick={resetDemo} title="Clear leftover test hazards">↺ Reset</button>
+      </div>
       <div className="pills">
         {DEMO_HAZARDS.map((h) => (
           <button key={h.type} className="pill" style={{ cursor: "pointer" }} onClick={() => injectHazard(h)}>

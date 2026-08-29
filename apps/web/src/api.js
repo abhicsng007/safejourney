@@ -51,6 +51,7 @@ export const api = {
   triageReport: (text, lat, lng, source = "crowd") =>
     req("/incidents/triage", { method: "POST", body: JSON.stringify({ text, lat, lng, source }) }),
   tts: (text) => req("/tts", { method: "POST", body: JSON.stringify({ text }) }),
+  resetDemo: () => req("/demo/reset", { method: "POST" }),
   webAdvisories: (body) =>
     req("/web-advisories", { method: "POST", body: JSON.stringify(body) }),
   mobility: (lat, lng, dlat, dlng) =>

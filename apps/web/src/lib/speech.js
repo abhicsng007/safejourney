@@ -14,6 +14,7 @@ let _useCloud = true; // try Cloud TTS first when available; browser is the fall
 let _audio = null; // currently-playing Cloud TTS audio element
 let _lastText = ""; // dedup: skip the same line repeated within a moment (double renders)
 let _lastAt = 0;
+let _gen = 0; // generation counter — a newer utterance supersedes older in-flight ones
 
 export function speechSupported() {
   return typeof window !== "undefined" && "speechSynthesis" in window;
@@ -58,23 +59,32 @@ function speakBrowser(text) {
   } catch {}
 }
 
-async function speakCloud(text) {
-  // Returns true if it played Cloud TTS audio, false to fall back to the browser voice.
+async function speakCloud(text, gen) {
+  // Returns true when the Cloud tier handled the utterance (played, or was superseded by a
+  // newer one), false only on a genuine failure so the browser voice can take over. Crucially
+  // it must NOT report failure when its own audio is interrupted — otherwise the same line
+  // gets spoken twice, once by Cloud and once by the browser (the "two accents" bug).
   if (!_useCloud || !navigator.onLine) return false;
   try {
     const res = await api.tts(text);
+    if (gen !== _gen) return true;          // a newer utterance started — don't double up
     if (!res || !res.audio) return false;
-    cancelSpeech();
     const audio = new Audio(`data:${res.mime || "audio/mpeg"};base64,${res.audio}`);
     _audio = audio;
-    await audio.play();
+    try {
+      await audio.play();
+    } catch (e) {
+      // AbortError = our own cancel/supersede paused it → handled, no fallback.
+      // Any other error (e.g. autoplay blocked) → let the browser voice try.
+      if (!e || e.name !== "AbortError") return false;
+    }
     return true;
   } catch {
     return false;
   }
 }
 
-/** Speak text aloud: Cloud TTS when available, else the on-device browser voice. */
+/** Speak text aloud: Cloud TTS when available, else the on-device browser voice. Never both. */
 export async function speak(text) {
   const t = (text || "").trim();
   if (!t) return;
@@ -82,8 +92,10 @@ export async function speak(text) {
   if (t === _lastText && now - _lastAt < 3000) return; // ignore an immediate repeat
   _lastText = t;
   _lastAt = now;
-  const played = await speakCloud(t);
-  if (!played) speakBrowser(t);
+  const myGen = ++_gen;   // claim the newest generation
+  cancelSpeech();         // stop whatever is currently speaking (one voice at a time)
+  const played = await speakCloud(t, myGen);
+  if (!played && myGen === _gen) speakBrowser(t); // fall back only if still current
 }
 
 function isSpeaking() {
