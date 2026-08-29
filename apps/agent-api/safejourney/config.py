@@ -40,6 +40,9 @@ class Settings:
         or os.getenv("GEMINI_API_KEY", "")
     )
 
+    # --- Text-to-Speech (spoken alerts; second Google model — Chirp/Neural2 voices) ---
+    tts_voice: str = os.getenv("TTS_VOICE", "en-IN-Neural2-A")
+
     # --- Maps Platform ---
     maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
@@ -72,6 +75,7 @@ class Settings:
             "gemini_model": self.gemini_model,
             "gemma_model": self.gemma_model,
             "gemma_enabled": bool(self.gemma_api_key),
+            "tts_voice": self.tts_voice,
             "use_vertex": self.use_vertex,
             "gemini_available": self.gemini_available,
             "maps_key": bool(self.maps_api_key),

@@ -3,6 +3,7 @@ import MapView from "./components/MapView.jsx";
 import { api } from "./api.js";
 import { enablePush, fcmConfigured } from "./lib/fcm.js";
 import { decodePolyline } from "./lib/polyline.js";
+import { speak, primeSpeech, cancelSpeech, speechSupported } from "./lib/speech.js";
 import {
   RATING_COLOR,
   ACTION_META,
@@ -160,6 +161,9 @@ export default function App() {
   const simRef = useRef(null);
   const [safetyScore, setSafetyScore] = useState(null);
   const [toasts, setToasts] = useState([]);
+  const [voiceOn, setVoiceOn] = useState(() => {
+    try { return localStorage.getItem("sj_voice") !== "off"; } catch { return true; }
+  });
   const [status, setStatus] = useState({ online: null, msg: "Checking backend…" });
   const [busy, setBusy] = useState(false);
   const [fitKey, setFitKey] = useState(0);
@@ -306,6 +310,8 @@ export default function App() {
 
   async function startGuardian() {
     if (!trip || !selectedRoute) return;
+    // This click is a user gesture — unlock audio and greet, so later alerts can speak.
+    if (voiceOn) { primeSpeech(); speak("Guardian is now watching your route. I'll warn you before any hazard."); }
     setBusy(true);
     try {
       await api.chooseRoute(trip.id, {
@@ -407,6 +413,16 @@ export default function App() {
     return () => navigator.geolocation.clearWatch(id);
   }, [phase, trip, gpsOn]);
 
+  function toggleVoice() {
+    setVoiceOn((v) => {
+      const next = !v;
+      try { localStorage.setItem("sj_voice", next ? "on" : "off"); } catch {}
+      if (!next) cancelSpeech();
+      else primeSpeech(); // this toggle is a user gesture — unlock audio
+      return next;
+    });
+  }
+
   async function refresh(tripId, silent = false) {
     try {
       const [hz, al] = await Promise.all([api.hazards(tripId), api.alerts(tripId)]);
@@ -419,6 +435,8 @@ export default function App() {
           if (!seenAlerts.current.has(a.id)) {
             seenAlerts.current.add(a.id);
             pushToast(a.title, a.message, ACTION_META[a.action]?.color || "#25c7dc");
+            // Speak the alert aloud — the hands-free safety moment.
+            if (voiceOn) speak(`${a.title}. ${a.message}`);
           }
         }
       } else {
@@ -597,6 +615,7 @@ export default function App() {
 
   async function arrived() {
     stopSim();
+    cancelSpeech();
     if (trip) await api.complete(trip.id).catch(() => {});
     setPhase("plan");
     setTrip(null);
@@ -630,6 +649,17 @@ export default function App() {
             <h1>SafeJourney</h1>
             <span className="tag">agentic travel guardian</span>
           </div>
+          {speechSupported() && (
+            <button
+              className={`btn btn-ghost voice-toggle ${voiceOn ? "on" : ""}`}
+              style={{ padding: "8px 11px" }}
+              onClick={toggleVoice}
+              title={voiceOn ? "Spoken alerts on" : "Spoken alerts off"}
+              aria-label="Toggle spoken alerts"
+            >
+              {voiceOn ? "🔊" : "🔇"}
+            </button>
+          )}
           {phase !== "plan" && (
             <button className="btn btn-ghost" style={{ padding: "8px 12px" }} onClick={arrived}>
               {phase === "active" ? "End" : "Back"}

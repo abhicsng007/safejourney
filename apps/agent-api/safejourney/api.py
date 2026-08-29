@@ -124,6 +124,10 @@ class TriageReportReq(BaseModel):
     file: bool = True  # also file the classified incident (False = classify only, no write)
 
 
+class TtsReq(BaseModel):
+    text: str
+
+
 # ---------- meta ----------
 @app.get("/health")
 def health() -> dict:
@@ -393,6 +397,20 @@ def triage_incident(req: TriageReportReq) -> dict:
         get_repo().add_incident(inc)
         incident = inc.model_dump(mode="json")
     return {"triage": triage, "incident": incident}
+
+
+@app.post("/tts")
+def tts(req: TtsReq) -> dict:
+    """Synthesize a natural neural voice for spoken alerts (Google Cloud Text-to-Speech).
+    Returns {audio: base64 mp3, mime} or {audio: null} so the client falls back to the
+    browser's on-device voice."""
+    import base64 as _b64
+    from .services.tts import synthesize
+
+    audio = synthesize(req.text)
+    if not audio:
+        return {"audio": None}
+    return {"audio": _b64.b64encode(audio).decode(), "mime": "audio/mpeg"}
 
 
 # ---------- monitoring (autonomous background loop) ----------
