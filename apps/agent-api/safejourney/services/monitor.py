@@ -69,6 +69,49 @@ def _adaptive_interval(hazards: list[Hazard]) -> int:
     return s.default_interval_s
 
 
+def _decision_trace(
+    hazards: list[Hazard],
+    score: float,
+    new_hazards: list[Hazard],
+    blocking: bool,
+    reroute_available: bool,
+    decision,
+    decided_by: str,
+) -> list[dict]:
+    """Assemble the autonomous decision as a visible, ordered reasoning trace — the same
+    schema the chat trace uses, so the UI renders both with one component. This is the
+    evidence that the alert was *reasoned*, not merely triggered."""
+    new_types = sorted({h.type.value.replace("_", " ") for h in new_hazards})
+    steps: list[dict] = [
+        {"kind": "tool_call", "name": "scan_route_hazards",
+         "agent": "hazard_sentinel", "args": {"road": "ahead"}},
+        {"kind": "tool_result", "name": "scan_route_hazards", "agent": "hazard_sentinel",
+         "summary": f"{len(hazards)} hazard(s) on road ahead · safety score {round(score, 1)}"},
+        {"kind": "tool_call", "name": "change_detection",
+         "agent": "hazard_sentinel", "args": {}},
+        {"kind": "tool_result", "name": "change_detection", "agent": "hazard_sentinel",
+         "summary": (f"{len(new_hazards)} newly-appeared: {', '.join(new_types)}"
+                     if new_hazards else "nothing new — staying quiet")},
+        {"kind": "delegate", "from": "hazard_sentinel", "to": "decision_agent"},
+    ]
+    if blocking:
+        steps.append({"kind": "tool_call", "name": "find_reroute",
+                      "agent": "decision_agent", "args": {}})
+        steps.append({"kind": "tool_result", "name": "find_reroute", "agent": "decision_agent",
+                      "summary": ("safer, non-blocking path found"
+                                  if reroute_available else "no safer path — shelter is safest")})
+    reason = getattr(decision, "reason", "") or decision.__dict__.get("reason", "")
+    steps.append({
+        "kind": "decision",
+        "agent": "decision_agent",
+        "action": decision.action.value,
+        "title": decision.title,
+        "reason": reason,
+        "decided_by": decided_by,
+    })
+    return steps
+
+
 def _try_reroute(trip: Trip) -> dict | None:
     """Look for a safer, non-blocking alternative from the current position onward."""
     start = (
@@ -109,8 +152,9 @@ def evaluate_trip(trip_id: str) -> dict:
     alert_out = None
     reroute_route = None
     reroute_available = False
+    blocking = bool(new_hazards and route_is_blocking(new_hazards))
 
-    if new_hazards and route_is_blocking(new_hazards):
+    if blocking:
         reroute_route = _try_reroute(trip)
         reroute_available = reroute_route is not None
 
@@ -119,6 +163,9 @@ def evaluate_trip(trip_id: str) -> dict:
     if decision:
         reason = getattr(decision, "reason", "") or decision.__dict__.get("reason", "")
         decided_by = "gemini" if get_settings().gemini_available else "rules"
+        trace = _decision_trace(
+            hazards, score, new_hazards, blocking, reroute_available, decision, decided_by
+        )
         # Apply a reroute by switching the trip's path to the safer route.
         if decision.action == AlertAction.REROUTE and reroute_route:
             trip.encoded_polyline = reroute_route["encoded_polyline"]
@@ -136,7 +183,8 @@ def evaluate_trip(trip_id: str) -> dict:
             precautions=decision.precautions,
             hazard_types=decision.hazard_types,
             location=loc,
-            meta={"reroute": bool(reroute_route), "reason": reason, "decided_by": decided_by},
+            meta={"reroute": bool(reroute_route), "reason": reason,
+                  "decided_by": decided_by, "trace": trace},
         )
         repo.save_alert(alert)
         pushed = send_push(

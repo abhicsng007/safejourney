@@ -28,6 +28,10 @@ class Settings:
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     # (Override GEMINI_MODEL only with a model your GCP project can access in its region and
     #  that supports Search grounding — an unavailable id makes grounded calls 404.)
+    # Gemma — a small, cheap open model used for the high-volume crowd-report triage (turning
+    # free-text/voice hazard reports into the structured hazard schema). Gemini stays reserved
+    # for low-volume, high-stakes reasoning; Gemma absorbs the classification firehose.
+    gemma_model: str = os.getenv("GEMMA_MODEL", "gemma-3-12b-it")
 
     # --- Maps Platform ---
     maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
@@ -59,6 +63,7 @@ class Settings:
     def summary(self) -> dict:
         return {
             "gemini_model": self.gemini_model,
+            "gemma_model": self.gemma_model,
             "use_vertex": self.use_vertex,
             "gemini_available": self.gemini_available,
             "maps_key": bool(self.maps_api_key),

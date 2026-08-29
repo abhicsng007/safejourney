@@ -133,22 +133,38 @@ def run_agent_trace(
     trace: list[dict] = []
     reply = ""
     for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
+        author = getattr(event, "author", "guardian_core") or "guardian_core"
         parts = (event.content.parts if event.content else None) or []
         for p in parts:
             fc = getattr(p, "function_call", None)
             fr = getattr(p, "function_response", None)
             if fc is not None:
-                trace.append({
-                    "kind": "tool_call",
-                    "name": getattr(fc, "name", "tool"),
-                    "args": dict(getattr(fc, "args", {}) or {}),
-                    "agent": getattr(event, "author", "guardian"),
-                })
+                name = getattr(fc, "name", "tool")
+                args = dict(getattr(fc, "args", {}) or {})
+                # ADK delegates by calling the special `transfer_to_agent` tool. Surface it
+                # as a first-class delegation step — the visible multi-agent hand-off.
+                if name == "transfer_to_agent":
+                    trace.append({
+                        "kind": "delegate",
+                        "from": author,
+                        "to": args.get("agent_name") or args.get("agent") or "specialist",
+                    })
+                else:
+                    trace.append({
+                        "kind": "tool_call",
+                        "name": name,
+                        "args": args,
+                        "agent": author,
+                    })
             if fr is not None:
+                name = getattr(fr, "name", "tool")
+                if name == "transfer_to_agent":
+                    continue  # the delegate step already conveys this
                 trace.append({
                     "kind": "tool_result",
-                    "name": getattr(fr, "name", "tool"),
+                    "name": name,
                     "summary": _summarize_tool_result(getattr(fr, "response", None)),
+                    "agent": author,
                 })
         if event.is_final_response() and parts:
             reply = "".join(getattr(p, "text", "") or "" for p in parts)

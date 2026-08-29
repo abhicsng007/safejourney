@@ -116,6 +116,14 @@ class IncidentReq(BaseModel):
     source: str = "crowd"
 
 
+class TriageReportReq(BaseModel):
+    text: str
+    lat: float
+    lng: float
+    source: str = "crowd"
+    file: bool = True  # also file the classified incident (False = classify only, no write)
+
+
 # ---------- meta ----------
 @app.get("/health")
 def health() -> dict:
@@ -358,6 +366,33 @@ def report_incident(req: IncidentReq) -> dict:
     )
     get_repo().add_incident(inc)
     return inc.model_dump(mode="json")
+
+
+@app.post("/incidents/triage")
+def triage_incident(req: TriageReportReq) -> dict:
+    """Free-text / voice hazard report → Gemma classifies it into the hazard schema, then
+    (unless file=false) files it as a geotagged incident so travellers behind are warned.
+    Returns {triage, incident}. Gemma is the primary; a keyword classifier is the fallback."""
+    import time as _time
+    from .services.triage import triage_report
+    from .tools.incident import ttl_for
+
+    triage = triage_report(req.text)
+    incident = None
+    # Skip filing an unclassifiable report so noise doesn't pollute other travellers' routes.
+    if req.file and triage["type"] != "other" and triage["confidence"] >= 0.4:
+        verified = req.source in ("official", "authority")
+        now = _time.time()
+        inc = Incident(
+            type=triage["type"], severity=triage["severity"], lat=req.lat, lng=req.lng,
+            geohash=geohash_encode(req.lat, req.lng, 7),
+            description=triage["description"], source=req.source,
+            verified=verified, reported_at=now,
+            expires_at=now + ttl_for(triage["type"], verified),
+        )
+        get_repo().add_incident(inc)
+        incident = inc.model_dump(mode="json")
+    return {"triage": triage, "incident": incident}
 
 
 # ---------- monitoring (autonomous background loop) ----------

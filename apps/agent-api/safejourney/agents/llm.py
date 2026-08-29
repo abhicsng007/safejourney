@@ -211,6 +211,47 @@ _DECISION_SYSTEM = (
 )
 
 
+def triage_report_gemma(
+    text: str,
+    allowed_types: list[str],
+    allowed_severities: list[str],
+) -> Optional[dict]:
+    """Classify a free-text / voice hazard report into the structured hazard schema, using the
+    small Gemma model (cheap enough to run on every crowd report at scale — Gemini is reserved
+    for the low-volume reasoning). Returns {type, severity, description, confidence} or None.
+
+    Gemma on the Gemini API doesn't accept a system instruction, JSON mime mode, or a thinking
+    config, so this call is deliberately self-contained: everything is in the user prompt and
+    the JSON is parsed leniently."""
+    client = _client()
+    if client is None:
+        return None
+    s = get_settings()
+    prompt = (
+        "You classify short hazard reports from travellers in India into a fixed schema. "
+        "A traveller just reported a road hazard in their own words. Extract:\n"
+        f"- type: exactly one of {allowed_types}\n"
+        f"- severity: exactly one of {allowed_severities} (how dangerous to a two-wheeler rider "
+        "or pedestrian right now)\n"
+        "- description: one short, factual clause (<=90 chars) restating the hazard, including any "
+        "landmark the reporter mentioned\n"
+        "- confidence: 0.0-1.0, how sure you are of the type\n"
+        'Reply with ONLY a JSON object: {"type":"...","severity":"...","description":"...","confidence":0.0}. '
+        "If the text names no real road hazard, use type \"other\" and confidence below 0.4.\n\n"
+        f"Report: {text!r}"
+    )
+    try:
+        from google.genai import types
+
+        cfg = types.GenerateContentConfig(max_output_tokens=200, temperature=0.1)
+        resp = client.models.generate_content(model=s.gemma_model, contents=prompt, config=cfg)
+        raw = (resp.text or "").strip()
+        return _parse_json_object(raw) if raw else None
+    except Exception as e:  # pragma: no cover
+        print(f"[llm] gemma triage failed ({e})")
+        return None
+
+
 def decide_action_llm(
     hazards: list[dict],
     mode: str,

@@ -34,6 +34,73 @@ function fmtMin(s) {
 }
 // Format a web-report date ("2026-08-26" or "2026-08") into a short human label.
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// ---- agent-reasoning display maps (powers the visible reasoning timeline) ----
+const AGENT_META = {
+  guardian_core: { label: "Guardian Core", icon: "🧭" },
+  guardian: { label: "Guardian Core", icon: "🧭" },
+  prep: { label: "Prep Agent", icon: "🎒" },
+  route_guardian: { label: "Route Guardian", icon: "🛡" },
+  safe_harbor: { label: "Safe Harbor", icon: "🏠" },
+  mobility: { label: "Mobility Agent", icon: "🚇" },
+  sos: { label: "SOS Guardian", icon: "🆘" },
+  hazard_sentinel: { label: "Hazard Sentinel", icon: "📡" },
+  decision_agent: { label: "Decision Agent", icon: "⚖" },
+};
+const agentMeta = (id) => AGENT_META[id] || { label: id || "Agent", icon: "◆" };
+const TOOL_META = {
+  plan_safe_routes: { icon: "🗺", label: "plan safe routes" },
+  scan_route_hazards: { icon: "🔎", label: "scan road ahead" },
+  check_trip_now: { icon: "📡", label: "check trip now" },
+  get_safe_harbors: { icon: "🏠", label: "find safe harbours" },
+  get_mobility_options: { icon: "🚇", label: "find alternatives" },
+  get_precautions: { icon: "📋", label: "get precautions" },
+  report_incident: { icon: "⚠", label: "report incident" },
+  change_detection: { icon: "🧮", label: "change detection" },
+  find_reroute: { icon: "🧭", label: "search for safer path" },
+};
+const ACTION_VERB = {
+  reroute: "REROUTE",
+  harbor: "TAKE SHELTER",
+  advisory: "ADVISORY",
+  sos: "ESCALATE / SOS",
+  clear: "ALL CLEAR",
+};
+const SEVERITY_RANK = { critical: 4, high: 3, moderate: 2, low: 1 };
+
+// Fastest-route (what a plain nav app picks) vs. SafeJourney's safety-ranked pick.
+// Everything is already on plan.routes, so this is a pure client-side derivation.
+function routeComparison(plan) {
+  const routes = plan?.routes || [];
+  if (routes.length < 2) return null;
+  const safest = routes.find((r) => r.route_id === plan.recommended_route_id) || routes[0];
+  const fastest = routes.reduce((a, b) => {
+    const da = a.duration_s || Infinity, db = b.duration_s || Infinity;
+    if (da !== db) return da < db ? a : b;
+    return (a.distance_m || Infinity) <= (b.distance_m || Infinity) ? a : b;
+  });
+  if (fastest.route_id === safest.route_id) return { agree: true, route: safest };
+  // Hazards the fastest route hits that the safe route avoids (diff by type), worst first.
+  const safeTypes = new Set((safest.hazards || []).map((h) => h.type));
+  const avoided = (fastest.hazards || [])
+    .filter((h) => !safeTypes.has(h.type))
+    .sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
+  const extraMin = Math.round(((safest.duration_s || 0) - (fastest.duration_s || 0)) / 60);
+  return { agree: false, fastest, safest, avoided, extraMin };
+}
+const toolMeta = (name) => TOOL_META[name] || { icon: "🛠", label: name };
+function fmtArgs(args) {
+  if (!args || typeof args !== "object") return "";
+  const parts = [];
+  for (const [k, v] of Object.entries(args)) {
+    if (v == null || v === "") continue;
+    let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (s.length > 28) s = s.slice(0, 27) + "…";
+    parts.push(`${k}: ${s}`);
+    if (parts.length >= 3) break;
+  }
+  return parts.join(" · ");
+}
 function fmtReportDate(d) {
   const s = (d || "").trim();
   let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
@@ -485,6 +552,33 @@ export default function App() {
     }
   }
 
+  async function reportHazardText(text) {
+    const p = position;
+    if (!p) {
+      pushToast("No location yet", "Turn on GPS or advance so I know where the hazard is.", "#f0b429");
+      return null;
+    }
+    const q = (text || "").trim();
+    if (!q) return null;
+    try {
+      const res = await api.triageReport(q, p.lat, p.lng);
+      const t = res.triage || {};
+      const via = t.source === "gemma" ? "Gemma" : "keyword match";
+      if (res.incident) {
+        const color = ["critical", "high"].includes(t.severity) ? "#ff6150" : t.severity === "moderate" ? "#f0b429" : "#33d08c";
+        pushToast(`Classified: ${hazardLabel(t.type)} · ${t.severity}`, `${via} understood your report and filed it — travellers behind you are warned.`, color);
+      } else {
+        pushToast("Couldn't classify that", "No clear road hazard found — try naming it (flood, live wire, pothole, accident…).", "#f0b429");
+      }
+      await api.tick();
+      if (trip) await refresh(trip.id);
+      return res;
+    } catch (e) {
+      pushToast("Report failed", String(e.message || e), "#ff6150");
+      return null;
+    }
+  }
+
   async function findEssentials(point, silent = false) {
     try {
       let essentials = [];
@@ -608,6 +702,7 @@ export default function App() {
               findEssentials={findEssentials}
               essentials={essentials}
               reportHazard={reportHazard}
+              reportHazardText={reportHazardText}
               mobility={mobility}
               gpsOn={gpsOn}
               toggleGps={() => setGpsOn((v) => !v)}
@@ -955,6 +1050,68 @@ function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
   );
 }
 
+function RouteTradeoff({ plan, onSelect }) {
+  const cmp = routeComparison(plan);
+  if (!cmp) return null;
+
+  if (cmp.agree) {
+    return (
+      <div className="tradeoff agree">
+        <span className="to-agree-title">✓ The fastest route is also the safest</span>
+        <span className="to-agree-sub">
+          SafeJourney checked every alternative — no trade-off needed this time.
+        </span>
+      </div>
+    );
+  }
+
+  const { fastest, safest, avoided, extraMin } = cmp;
+  const worst = avoided[0];
+  const timeTag = extraMin > 0 ? `+${extraMin} min` : extraMin < 0 ? `${extraMin} min` : "same time";
+  const costPhrase = extraMin > 0 ? `${extraMin} min more` : extraMin < 0 ? `${-extraMin} min less` : "no extra time";
+  const Col = ({ kind, label, r, tag }) => {
+    const color = RATING_COLOR[r.rating] || "#25c7dc";
+    return (
+      <button className={`to-col ${kind}`} onClick={() => onSelect?.(r.route_id)} title="Show this route on the map">
+        <span className="to-col-label">{label}</span>
+        <span className="to-time">
+          {fmtMin(r.duration_s)}
+          {tag && <em className="to-tag">{tag}</em>}
+        </span>
+        <span className="to-rate" style={{ color }}>◍ {r.score} · {r.rating}</span>
+        <span className="to-haz">{r.hazards.length} hazard{r.hazards.length === 1 ? "" : "s"} on path</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="tradeoff">
+      <div className="to-head">Why not just the fastest route?</div>
+      <div className="to-grid">
+        <Col kind="fast" label="🕐 Fastest (typical nav)" r={fastest} />
+        <span className="to-vs">vs</span>
+        <Col kind="safe" label="🛡 SafeJourney pick" r={safest} tag={timeTag} />
+      </div>
+      <div className="to-verdict">
+        {worst ? (
+          <>
+            For <strong>{costPhrase}</strong>, SafeJourney routes you around a{" "}
+            <strong className="to-hz">{HAZARD_ICON[worst.type] || "❗"} {worst.severity} {hazardLabel(worst.type)}</strong>{" "}
+            that the fastest route runs straight through
+            {worst.description ? ` — ${worst.description.replace(/[.\s]+$/, "")}` : ""}.
+          </>
+        ) : (
+          <>
+            The fastest route is rated <strong className="to-hz">{fastest.rating}</strong> (score {fastest.score});
+            SafeJourney's pick is <strong style={{ color: RATING_COLOR[safest.rating] }}>{safest.rating}</strong>{" "}
+            (score {safest.score}) — safer for {costPhrase}.
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy, mode, pedFeatures = [] }) {
   const steps = selectedRoute?.meta?.steps || [];
   const isWalk = mode === "walk";
@@ -962,6 +1119,7 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
     <>
       <AgentNote agent={plan.agent} />
       <div className="hint">{plan.advice}</div>
+      <RouteTradeoff plan={plan} onSelect={onSelect} />
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {plan.routes.map((r) => {
           const color = RATING_COLOR[r.rating] || "#25c7dc";
@@ -1074,6 +1232,93 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
   );
 }
 
+function ReasoningTrace({ trace }) {
+  const [open, setOpen] = useState(true);
+  const steps = trace.filter((t) => t.kind !== "tool_result" || t.summary);
+  const nCalls = trace.filter((t) => t.kind === "tool_call").length;
+  const nAgents = new Set(
+    trace.filter((t) => t.kind === "delegate").map((t) => t.to)
+  ).size;
+  const summary =
+    `${nCalls} tool ${nCalls === 1 ? "call" : "calls"}` +
+    (nAgents ? ` · ${nAgents} specialist${nAgents === 1 ? "" : "s"}` : "");
+
+  return (
+    <div className={`reasoning ${open ? "open" : ""}`}>
+      <button className="reason-head" onClick={() => setOpen((v) => !v)}>
+        <span className="rh-title">◆ Guardian reasoning</span>
+        <span className="rh-sub">{summary}</span>
+        <span className="rh-chev">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <ol className="reason-steps">
+          {steps.map((t, j) => {
+            if (t.kind === "delegate") {
+              const to = agentMeta(t.to);
+              return (
+                <li className="rstep delegate" key={j}>
+                  <span className="rdot" />
+                  <span className="rbody">
+                    <span className="deleg">
+                      <span className="ag-badge">{agentMeta(t.from).icon} {agentMeta(t.from).label}</span>
+                      <span className="arrow">→</span>
+                      <span className="ag-badge to">{to.icon} {to.label}</span>
+                    </span>
+                    <span className="rmeta">delegated</span>
+                  </span>
+                </li>
+              );
+            }
+            if (t.kind === "decision") {
+              return (
+                <li className="rstep decision" key={j}>
+                  <span className="rdot" />
+                  <span className="rbody">
+                    <span className="rline">
+                      <span className="ricon">⚖</span>
+                      <span className="dec-verdict">{ACTION_VERB[t.action] || t.action}</span>
+                      {t.decided_by && (
+                        <span className="dec-by">decided by {t.decided_by}</span>
+                      )}
+                    </span>
+                    {t.reason && <span className="dec-reason">{t.reason}</span>}
+                  </span>
+                </li>
+              );
+            }
+            if (t.kind === "tool_call") {
+              const tm = toolMeta(t.name);
+              const args = fmtArgs(t.args);
+              return (
+                <li className="rstep call" key={j}>
+                  <span className="rdot" />
+                  <span className="rbody">
+                    <span className="rline">
+                      <span className="ricon">{tm.icon}</span>
+                      <span className="rname">{tm.label}</span>
+                      {t.agent && <span className="rby">{agentMeta(t.agent).label}</span>}
+                    </span>
+                    {args && <span className="rargs">{args}</span>}
+                  </span>
+                </li>
+              );
+            }
+            // tool_result
+            return (
+              <li className="rstep result" key={j}>
+                <span className="rdot" />
+                <span className="rbody">
+                  <span className="rresult">↳ {t.summary}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function GuardianChat({ trip }) {
   const [log, setLog] = useState([]); // {role:'user'|'agent', text, trace?}
   const [text, setText] = useState("");
@@ -1128,26 +1373,7 @@ function GuardianChat({ trip }) {
         {log.map((m, i) => (
           <div className={`msg ${m.role}`} key={i}>
             <div className="bubble">{m.text}</div>
-            {m.trace?.length > 0 && (
-              <div className="trace">
-                {m.trace.map((t, j) => (
-                  <div className="step" key={j}>
-                    {t.kind === "tool_call" ? (
-                      <>
-                        <span className="tk">🛠 call</span>
-                        <span className="nm">{t.name}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="tk">↳ result</span>
-                        <span className="nm">{t.name}</span>
-                        <span>· {t.summary}</span>
-                      </>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+            {m.trace?.length > 0 && <ReasoningTrace trace={m.trace} />}
           </div>
         ))}
         {busy && <div className="msg agent"><div className="bubble">Guardian is thinking…</div></div>}
@@ -1168,7 +1394,104 @@ function GuardianChat({ trip }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
+function NaturalReport({ onReport }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // last triage {type,severity,source,confidence}
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+
+  const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function toggleMic() {
+    if (!SR) return;
+    if (listening) { recRef.current?.stop(); return; }
+    const rec = new SR();
+    rec.lang = "en-IN";
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const tr = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += tr;
+        else interim += tr;
+      }
+      setText((finalText + interim).trim());
+    };
+    rec.onend = () => { setListening(false); recRef.current = null; };
+    rec.onerror = () => { setListening(false); recRef.current = null; };
+    recRef.current = rec;
+    setListening(true);
+    rec.start();
+  }
+
+  async function submit() {
+    const q = text.trim();
+    if (!q || busy) return;
+    recRef.current?.stop();
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await onReport?.(q);
+      if (res?.triage) setResult(res.triage);
+      if (res?.incident) setText("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const sevColor = (s) => (["critical", "high"].includes(s) ? "var(--danger)" : s === "moderate" ? "var(--caution)" : "var(--safe)");
+
+  return (
+    <div className="nl-report">
+      <div className="nl-row">
+        <input
+          className="nl-input"
+          value={text}
+          placeholder='Describe it — e.g. "live wire in the water under the bridge"'
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          disabled={busy}
+        />
+        {SR && (
+          <button
+            className={`nl-mic ${listening ? "on" : ""}`}
+            onClick={toggleMic}
+            title={listening ? "Stop" : "Speak your report"}
+            aria-label="Voice report"
+          >
+            {listening ? "●" : "🎤"}
+          </button>
+        )}
+        <button className="btn btn-primary nl-send" onClick={submit} disabled={busy || !text.trim()}>
+          {busy ? "…" : "Report"}
+        </button>
+      </div>
+      <div className="nl-caption">
+        {listening ? (
+          <span className="nl-listening">● Listening…</span>
+        ) : result ? (
+          <span className="nl-result">
+            <span className="nl-via">{result.source === "gemma" ? "🧠 Gemma" : "⌨ keyword"}</span>
+            {" → "}
+            <span style={{ color: sevColor(result.severity), fontWeight: 600 }}>
+              {HAZARD_ICON[result.type] || "❗"} {hazardLabel(result.type)} · {result.severity}
+            </span>
+            {result.source === "gemma" && result.confidence != null && (
+              <span className="nl-conf"> ({Math.round(result.confidence * 100)}% conf.)</span>
+            )}
+          </span>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>Type or speak naturally — a model files it under the right hazard.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, reportHazardText, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -1212,7 +1535,8 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
       <div className="divider" />
       <span className="section-label">See a hazard? Report it</span>
       <div className="hint">Files a geotagged report at your location so travellers behind you are warned.</div>
-      <div className="pills">
+      <NaturalReport onReport={reportHazardText} />
+      <div className="pills" style={{ marginTop: 8 }}>
         {REPORT_TYPES.map((rt) => (
           <button key={rt.type} className="pill report-pill" onClick={() => reportHazard(rt)}>
             {HAZARD_ICON[rt.type] || "❗"} {rt.label}
@@ -1290,15 +1614,19 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
               </div>
               <div className="a-title">{a.title}</div>
               <div className="a-msg">{a.message}</div>
-              {(a.meta?.reason || a.meta?.decided_by) && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  {a.meta?.decided_by && (
-                    <span className="decided-by">decided by {a.meta.decided_by}</span>
-                  )}
-                  {a.meta?.reason && (
-                    <span className="hint" style={{ fontStyle: "italic" }}>{a.meta.reason}</span>
-                  )}
-                </div>
+              {a.meta?.trace?.length > 0 ? (
+                <ReasoningTrace trace={a.meta.trace} />
+              ) : (
+                (a.meta?.reason || a.meta?.decided_by) && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {a.meta?.decided_by && (
+                      <span className="decided-by">decided by {a.meta.decided_by}</span>
+                    )}
+                    {a.meta?.reason && (
+                      <span className="hint" style={{ fontStyle: "italic" }}>{a.meta.reason}</span>
+                    )}
+                  </div>
+                )
               )}
               {a.precautions?.length > 0 && (
                 <ul className="precautions" style={{ marginTop: 4 }}>

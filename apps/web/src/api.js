@@ -48,6 +48,8 @@ export const api = {
     req("/pedestrian/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
   reportIncident: (body) =>
     req("/incidents", { method: "POST", body: JSON.stringify(body) }),
+  triageReport: (text, lat, lng, source = "crowd") =>
+    req("/incidents/triage", { method: "POST", body: JSON.stringify({ text, lat, lng, source }) }),
   webAdvisories: (body) =>
     req("/web-advisories", { method: "POST", body: JSON.stringify(body) }),
   mobility: (lat, lng, dlat, dlng) =>
