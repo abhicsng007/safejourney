@@ -183,6 +183,7 @@ export default function App() {
   const warnedProx = useRef(new Set());
   const navIdx = useRef(0);          // next route step to narrate
   const navPre = useRef(new Set());  // step indices already pre-announced ("in 200 m…")
+  const spokenProx = useRef(new Set()); // hazards whose proximity warning was actually voiced
   const arrivedSpoken = useRef(false);
 
   // health check
@@ -400,9 +401,16 @@ export default function App() {
           h.description || "Approaching a hazard — slow down and stay alert.",
           "#ff8a3d"
         );
-        if (voiceOn) speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${Math.round(d / 10) * 10} meters ahead. Slow down.`);
-      } else if (d > 550 && warnedProx.current.has(key)) {
+      }
+      // Voice the warning independently of the toast, and retry until it actually speaks
+      // (speakNav yields when something else is talking) — so it isn't lost mid-sim.
+      if (voiceOn && d <= 350 && !spokenProx.current.has(key)) {
+        if (speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${Math.round(d / 10) * 10} meters ahead. Slow down.`)) {
+          spokenProx.current.add(key);
+        }
+      } else if (d > 550) {
         warnedProx.current.delete(key); // re-arm once well past, so a loop back re-warns
+        spokenProx.current.delete(key);
       }
     }
   }, [position, hazards, phase]);
@@ -420,14 +428,16 @@ export default function App() {
       if (!s?.start || s.start.lat == null) { i++; continue; }
       const d = haversineM(position.lat, position.lng, s.start.lat, s.start.lng);
       if (d < 35) {
-        // At the maneuver: speak it plainly only if it wasn't already pre-announced.
-        if (!navPre.current.has(i)) { speakNav(navLine(s.instruction, 0)); navPre.current.add(i); }
+        // At the maneuver: speak it plainly only if it wasn't already announced. Mark it only
+        // if the voice actually launched (speakNav yields when something else is speaking), so
+        // a yielded turn isn't lost — but advance past it either way (we've reached it).
+        if (!navPre.current.has(i) && speakNav(navLine(s.instruction, 0))) navPre.current.add(i);
         i++;
         continue; // steps can be close together — check the next one too
       }
       if (d < 220 && !navPre.current.has(i)) {
-        navPre.current.add(i);
-        speakNav(navLine(s.instruction, d)); // "in 200 meters, turn left onto MG Road"
+        // Only mark announced if it actually spoke; otherwise retry on the next position tick.
+        if (speakNav(navLine(s.instruction, d))) navPre.current.add(i);
       }
       break; // only reason about the nearest upcoming step
     }

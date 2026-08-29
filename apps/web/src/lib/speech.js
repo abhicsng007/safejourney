@@ -15,6 +15,9 @@ let _audio = null; // currently-playing Cloud TTS audio element
 let _lastText = ""; // dedup: skip the same line repeated within a moment (double renders)
 let _lastAt = 0;
 let _gen = 0; // generation counter — a newer utterance supersedes older in-flight ones
+let _pending = false; // a high-priority utterance is being launched (fetch in flight) — treat
+                      // as "speaking" so rapid nav/proximity calls yield instead of superseding
+                      // it before its audio can start (the "nothing plays during sim" cascade)
 
 export function speechSupported() {
   return typeof window !== "undefined" && "speechSynthesis" in window;
@@ -93,22 +96,30 @@ export async function speak(text) {
   _lastText = t;
   _lastAt = now;
   const myGen = ++_gen;   // claim the newest generation
+  _pending = true;        // hold off lower-priority narration while we launch this
   cancelSpeech();         // stop whatever is currently speaking (one voice at a time)
-  const played = await speakCloud(t, myGen);
-  if (!played && myGen === _gen) speakBrowser(t); // fall back only if still current
+  try {
+    const played = await speakCloud(t, myGen);
+    if (myGen === _gen && !played) speakBrowser(t); // fall back only if still current
+  } finally {
+    if (myGen === _gen) _pending = false; // launched — audio/browser now carries the state
+  }
 }
 
 function isSpeaking() {
+  if (_pending) return true; // a fetch is in flight — don't step on it
   const browser = speechSupported() && window.speechSynthesis.speaking;
   const cloud = _audio && !_audio.paused && !_audio.ended;
   return !!(browser || cloud);
 }
 
-/** Lower-priority narration (turn-by-turn, proximity): only speaks when nothing else is —
- * so a safety alert or another instruction is never cut off. Skipped otherwise. */
-export async function speakNav(text) {
-  if (isSpeaking()) return;
-  return speak(text);
+/** Lower-priority narration (turn-by-turn, proximity): speaks only when nothing else is, so a
+ * safety alert or another instruction is never cut off. Returns true if it actually launched
+ * (so the caller can mark the step announced), false if it yielded. Synchronous on purpose. */
+export function speakNav(text) {
+  if (isSpeaking()) return false;
+  speak(text); // fire-and-forget; we've claimed the slot
+  return true;
 }
 
 export function cancelSpeech() {
