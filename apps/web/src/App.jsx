@@ -374,7 +374,7 @@ export default function App() {
     let alive = true;
     const loop = async () => {
       try {
-        await api.tick();
+        await api.evaluate(trip.id);
         if (alive) await refresh(trip.id);
       } catch {}
     };
@@ -503,7 +503,7 @@ export default function App() {
     if (!trip) return;
     try {
       await api.forceHazard(trip.id, h.type, h.severity);
-      await api.tick();
+      await api.evaluate(trip.id);
       await refresh(trip.id);
     } catch (e) {
       pushToast("Demo failed", String(e.message || e), "#ff6150");
@@ -632,8 +632,7 @@ export default function App() {
       });
       pushToast("Thanks — reported", `${rt.label} logged. Travellers behind you will be warned.`, "#33d08c");
       // Surface it immediately on this trip too.
-      await api.tick();
-      if (trip) await refresh(trip.id);
+      if (trip) { await api.evaluate(trip.id); await refresh(trip.id); }
     } catch (e) {
       pushToast("Report failed", String(e.message || e), "#ff6150");
     }
@@ -657,8 +656,7 @@ export default function App() {
       } else {
         pushToast("Couldn't classify that", "No clear road hazard found — try naming it (flood, live wire, pothole, accident…).", "#f0b429");
       }
-      await api.tick();
-      if (trip) await refresh(trip.id);
+      if (trip) { await api.evaluate(trip.id); await refresh(trip.id); }
       return res;
     } catch (e) {
       pushToast("Report failed", String(e.message || e), "#ff6150");

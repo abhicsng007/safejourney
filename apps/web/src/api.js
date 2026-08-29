@@ -29,6 +29,9 @@ export const api = {
   alerts: (id) => req(`/trips/${id}/alerts`),
   hazards: (id) => req(`/trips/${id}/hazards`),
   tick: () => req("/monitor/tick", { method: "POST" }),
+  // Evaluate only THIS trip (fast, isolated) instead of the global dispatch — the client
+  // never needs to evaluate everyone else's trips.
+  evaluate: (tripId) => req("/monitor/evaluate", { method: "POST", body: JSON.stringify({ trip_id: tripId }) }),
   forceHazard: (tripId, type, severity, at_fraction = 0.55) =>
     req("/demo/force-hazard", {
       method: "POST",

@@ -131,6 +131,17 @@ class InMemoryRepo:
             self._incidents.clear()
         return n
 
+    def complete_all_active_trips(self) -> int:
+        """Mark every active trip completed — stops the dispatcher churning on stale test
+        trips after a demo reset. Returns how many were closed."""
+        with self._lock:
+            n = 0
+            for t in self._trips.values():
+                if t.status == TripStatus.ACTIVE:
+                    t.status = TripStatus.COMPLETED
+                    n += 1
+        return n
+
     # --- hazard cache (geohash+type keyed, TTL) ---
     def cache_get(self, key: str) -> Optional[dict]:
         item = self._cache.get(key)
@@ -246,6 +257,19 @@ class FirestoreRepo(InMemoryRepo):
         batch = self.db.batch()
         for d in col.limit(500).stream():
             batch.delete(d.reference)
+            count += 1
+        if count:
+            batch.commit()
+        return count
+
+    def complete_all_active_trips(self) -> int:
+        """Mark every active trip completed — stops the dispatcher churning on stale test
+        trips after a demo reset. Returns how many were closed."""
+        q = self.db.collection("trips").where("status", "==", TripStatus.ACTIVE.value).limit(500)
+        count = 0
+        batch = self.db.batch()
+        for d in q.stream():
+            batch.update(d.reference, {"status": TripStatus.COMPLETED.value})
             count += 1
         if count:
             batch.commit()

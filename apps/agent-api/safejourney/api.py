@@ -459,8 +459,10 @@ async def monitor_evaluate(payload: dict) -> dict:
 def demo_reset() -> dict:
     """Clear all crowd/demo hazard incidents — a clean slate before a fresh demo run, so the
     route isn't saturated with leftover test hazards (which would suppress new alerts)."""
-    deleted = get_repo().delete_all_incidents()
-    return {"cleared_incidents": deleted}
+    repo = get_repo()
+    deleted = repo.delete_all_incidents()
+    closed = repo.complete_all_active_trips()
+    return {"cleared_incidents": deleted, "closed_trips": closed}
 
 
 @app.post("/demo/force-hazard")
