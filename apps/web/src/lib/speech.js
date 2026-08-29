@@ -86,6 +86,19 @@ export async function speak(text) {
   if (!played) speakBrowser(t);
 }
 
+function isSpeaking() {
+  const browser = speechSupported() && window.speechSynthesis.speaking;
+  const cloud = _audio && !_audio.paused && !_audio.ended;
+  return !!(browser || cloud);
+}
+
+/** Lower-priority narration (turn-by-turn, proximity): only speaks when nothing else is —
+ * so a safety alert or another instruction is never cut off. Skipped otherwise. */
+export async function speakNav(text) {
+  if (isSpeaking()) return;
+  return speak(text);
+}
+
 export function cancelSpeech() {
   if (speechSupported()) {
     try { window.speechSynthesis.cancel(); } catch {}

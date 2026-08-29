@@ -3,7 +3,7 @@ import MapView from "./components/MapView.jsx";
 import { api } from "./api.js";
 import { enablePush, fcmConfigured } from "./lib/fcm.js";
 import { decodePolyline } from "./lib/polyline.js";
-import { speak, primeSpeech, cancelSpeech, speechSupported } from "./lib/speech.js";
+import { speak, speakNav, primeSpeech, cancelSpeech, speechSupported } from "./lib/speech.js";
 import {
   RATING_COLOR,
   ACTION_META,
@@ -127,6 +127,13 @@ function fmtAhead(m) {
   if (m == null) return "";
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 }
+// Phrase a route step as a spoken turn-by-turn line, optionally with a lead-in distance.
+function navLine(instruction, meters) {
+  const instr = (instruction || "Continue ahead").trim();
+  if (!meters) return instr;
+  const rounded = meters >= 1000 ? `${(meters / 1000).toFixed(1)} kilometers` : `${Math.round(meters / 10) * 10} meters`;
+  return `In ${rounded}, ${instr.charAt(0).toLowerCase()}${instr.slice(1)}`;
+}
 function fmtStepDist(m) {
   if (!m) return "";
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
@@ -170,6 +177,9 @@ export default function App() {
   const [focusPoint, setFocusPoint] = useState(null);
   const seenAlerts = useRef(new Set());
   const warnedProx = useRef(new Set());
+  const navIdx = useRef(0);          // next route step to narrate
+  const navPre = useRef(new Set());  // step indices already pre-announced ("in 200 m…")
+  const arrivedSpoken = useRef(false);
 
   // health check
   useEffect(() => {
@@ -334,6 +344,9 @@ export default function App() {
       setAlerts([]);
       setHarbors([]);
       seenAlerts.current = new Set();
+      navIdx.current = 0;
+      navPre.current = new Set();
+      arrivedSpoken.current = false;
       setPhase("active");
       setFitKey((k) => k + 1);
       refresh(t.id, true);
@@ -383,11 +396,48 @@ export default function App() {
           h.description || "Approaching a hazard — slow down and stay alert.",
           "#ff8a3d"
         );
+        if (voiceOn) speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${Math.round(d / 10) * 10} meters ahead. Slow down.`);
       } else if (d > 550 && warnedProx.current.has(key)) {
         warnedProx.current.delete(key); // re-arm once well past, so a loop back re-warns
       }
     }
   }, [position, hazards, phase]);
+
+  // Turn-by-turn voice guidance: as the traveller approaches each route step, narrate the
+  // maneuver ("in 200 meters, turn left onto MG Road") like a nav app. Lower priority than a
+  // safety alert (speakNav yields to it). Uses the selected route's steps.
+  useEffect(() => {
+    if (phase !== "active" || !voiceOn || !position) return;
+    const steps = selectedRoute?.meta?.steps || [];
+    if (!steps.length) return;
+    let i = navIdx.current;
+    while (i < steps.length) {
+      const s = steps[i];
+      if (!s?.start || s.start.lat == null) { i++; continue; }
+      const d = haversineM(position.lat, position.lng, s.start.lat, s.start.lng);
+      if (d < 35) {
+        // At the maneuver: speak it plainly only if it wasn't already pre-announced.
+        if (!navPre.current.has(i)) { speakNav(navLine(s.instruction, 0)); navPre.current.add(i); }
+        i++;
+        continue; // steps can be close together — check the next one too
+      }
+      if (d < 220 && !navPre.current.has(i)) {
+        navPre.current.add(i);
+        speakNav(navLine(s.instruction, d)); // "in 200 meters, turn left onto MG Road"
+      }
+      break; // only reason about the nearest upcoming step
+    }
+    navIdx.current = i;
+
+    // Near the destination — announce arrival once.
+    if (!arrivedSpoken.current) {
+      const dest = trip?.destination;
+      if (dest && haversineM(position.lat, position.lng, dest.lat, dest.lng) < 60) {
+        arrivedSpoken.current = true;
+        speakNav("You have arrived at your destination. Stay safe.");
+      }
+    }
+  }, [position, phase, voiceOn, selectedRoute, trip]);
 
   // Real GPS: stream the device location to the backend so monitoring watches the road
   // actually ahead of the traveller. Falls back to the simulate buttons when off/denied.
@@ -492,6 +542,10 @@ export default function App() {
     setSimulating(true);
     setGpsOn(false);              // simulated position overrides any live GPS
     warnedProx.current = new Set(); // re-arm proximity warnings for the run
+    navIdx.current = 0;             // restart turn-by-turn guidance from the first step
+    navPre.current = new Set();
+    arrivedSpoken.current = false;
+    if (voiceOn) speak("Starting navigation. I'll guide you turn by turn and warn you of hazards ahead.");
     const start = performance.now();
     let lastPush = 0;
     const step = (now) => {
