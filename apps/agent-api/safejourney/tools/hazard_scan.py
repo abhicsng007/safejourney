@@ -69,9 +69,15 @@ def scan_corridor(
     sampled = [(lat, lng) for lat, lng, _ in sample_polyline(route_points, step_m=500.0)]
     geohashes = corridor_geohashes(route_points, precision=7, step_m=150.0)
 
-    # Run independent network sources in parallel — the tick stays fast even with several feeds.
+    # Run independent network sources in parallel under a HARD total budget: a throttled feed
+    # (e.g. Overpass timing out on every mirror) must never stall the whole scan. We collect
+    # whatever finished within the deadline and abandon stragglers (shutdown(wait=False)), so a
+    # tick/plan stays responsive and simply loses that one feed's hazards for this run.
+    import time as _time
+
     hazards: list[Hazard] = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    pool = ThreadPoolExecutor(max_workers=6)
+    try:
         f_weather = pool.submit(weather_hazards, sampled)
         f_roadwork = pool.submit(roadwork_hazards, sampled) if include_roadwork else None
         f_incident = (
@@ -80,30 +86,34 @@ def scan_corridor(
         )
         f_unlit = pool.submit(unlit_hazards, sampled) if include_roadwork else None
         f_osm = pool.submit(osm_hazards, sampled) if include_roadwork else None
+        f_ped = pool.submit(pedestrian_hazards, route_points) if mode == "walk" else None
 
-        weather = f_weather.result() or []
+        deadline = _time.time() + 9.0
+
+        def _grab(f):
+            if f is None:
+                return []
+            try:
+                return f.result(timeout=max(0.1, deadline - _time.time())) or []
+            except Exception:
+                return []  # slow/failed feed — skip it for this scan
+
+        weather = _grab(f_weather)
         hazards += weather
-        if f_roadwork:
-            hazards += f_roadwork.result() or []
-        if f_incident:
-            hazards += f_incident.result() or []
-        if f_unlit:
-            hazards += f_unlit.result() or []
-        if f_osm:
-            hazards += f_osm.result() or []
+        for f in (f_roadwork, f_incident, f_unlit, f_osm, f_ped):
+            hazards += _grab(f)
 
         # Disaster/GLOF reasoning depends on whether it's currently wet along the route.
         if include_disaster:
             raining = any(h.type in _WET_TYPES for h in weather)
-            hazards += disaster_hazards(sampled, raining=raining) or []
+            f_disaster = pool.submit(disaster_hazards, sampled, raining)
+            hazards += _grab(f_disaster)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # Local, no-network detectors — cheap, always on.
     hazards += sharp_turn_hazards(route_points) or []
     hazards += blackspot_hazards(route_points, max_offset_m) or []
-
-    # Walk-only: flag no-footpath / vehicle-only-underpass stretches (Overpass, keyless).
-    if mode == "walk":
-        hazards += pedestrian_hazards(route_points) or []
 
     _annotate(hazards, route_points)
     # Drop hazards that turned out to be far from the actual line.
