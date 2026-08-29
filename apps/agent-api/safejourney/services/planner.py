@@ -34,7 +34,7 @@ def score_route(
     mode: str = "two_wheeler",
     risk_tolerance: float = 1.0,
 ) -> ScoredRoute:
-    hazards = scan_corridor(route["points"])
+    hazards = scan_corridor(route["points"], mode=mode)
     score = safety_score(hazards, mode=mode, risk_tolerance=risk_tolerance)
     rating = classify_score(score)
     return ScoredRoute(

@@ -44,10 +44,11 @@ def scan_route_hazards(encoded_polyline: str, mode: str = "two_wheeler") -> dict
 
     Args:
         encoded_polyline: A Google/Mapbox encoded polyline for the route.
-        mode: Travel mode, affects nothing here but documents intent.
+        mode: Travel mode; "walk" adds a pedestrian check for no-footpath / vehicle-only
+            underpass stretches.
     """
     pts = decode_polyline(encoded_polyline)
-    hazards = scan_corridor(pts)
+    hazards = scan_corridor(pts, mode=mode)
     return {
         "count": len(hazards),
         "hazards": [h.to_dict() for h in hazards],

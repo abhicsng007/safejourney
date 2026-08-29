@@ -38,6 +38,7 @@ export const HAZARD_ICON = {
   blackspot: "⚠️",
   sharp_turn: "🌀",
   rail_crossing: "🚂",
+  no_footpath: "🚶",
   accident: "💥",
   unsafe_area: "🚷",
   other: "❗",

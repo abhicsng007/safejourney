@@ -26,6 +26,7 @@ from .geometry_hazards import sharp_turn_hazards
 from .lighting import unlit_hazards
 from .blackspot import blackspot_hazards
 from .osm_hazards import osm_hazards
+from .pedestrian_hazards import pedestrian_hazards
 
 _WET_TYPES = {HazardType.FLOOD, HazardType.STORM, HazardType.WATERLOGGING, HazardType.LIGHTNING}
 
@@ -55,6 +56,7 @@ def _dedupe(hazards: list[Hazard]) -> list[Hazard]:
 def scan_corridor(
     route_points: list[tuple[float, float]],
     *,
+    mode: str = "two_wheeler",
     include_incidents: bool = True,
     include_roadwork: bool = True,
     include_disaster: bool = True,
@@ -98,6 +100,10 @@ def scan_corridor(
     # Local, no-network detectors — cheap, always on.
     hazards += sharp_turn_hazards(route_points) or []
     hazards += blackspot_hazards(route_points, max_offset_m) or []
+
+    # Walk-only: flag no-footpath / vehicle-only-underpass stretches (Overpass, keyless).
+    if mode == "walk":
+        hazards += pedestrian_hazards(route_points) or []
 
     _annotate(hazards, route_points)
     # Drop hazards that turned out to be far from the actual line.

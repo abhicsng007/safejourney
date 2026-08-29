@@ -73,6 +73,11 @@ PRECAUTIONS: dict[HazardType, list[str]] = {
     HazardType.RAIL_CROSSING: [
         "Unmanned crossing — stop, look both ways, cross only when clearly safe.",
     ],
+    HazardType.NO_FOOTPATH: [
+        "No footpath here — walk facing oncoming traffic and keep to the very edge.",
+        "Never walk through a vehicle-only underpass; use the footbridge or signalled crossing.",
+        "Cross only at a zebra crossing or signal, and wear something visible after dark.",
+    ],
     HazardType.ACCIDENT: [
         "Crash reported ahead — approach slowly, expect stopped traffic and responders.",
     ],

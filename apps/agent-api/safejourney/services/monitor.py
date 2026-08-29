@@ -93,7 +93,7 @@ def evaluate_trip(trip_id: str) -> dict:
         return {"trip_id": trip_id, "skipped": f"status={trip.status.value}"}
 
     remaining = _remaining_points(trip)
-    hazards = scan_corridor(remaining)
+    hazards = scan_corridor(remaining, mode=trip.mode.value)
     score = safety_score(hazards, mode=trip.mode.value)
 
     snap = HazardSnapshot(

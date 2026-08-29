@@ -144,6 +144,30 @@ def test_osm_tag_mapping():
     assert _hazard_from_element({"lat": 12.9, "lon": 77.6, "tags": {"highway": "residential"}}) is None
 
 
+# ---- pedestrian (walk-only) hazards ----
+
+def test_pedestrian_classify_way():
+    from safejourney.tools.pedestrian_hazards import classify_way
+
+    assert classify_way({"highway": "footway"}) == "pedestrian"
+    assert classify_way({"highway": "residential", "foot": "yes"}) == "pedestrian"
+    assert classify_way({"highway": "primary", "sidewalk": "both"}) == "pedestrian"
+    assert classify_way({"highway": "motorway"}) == "vehicle_only"
+    assert classify_way({"highway": "trunk", "foot": "no"}) == "vehicle_only"
+    # A plain residential road is neither a footway nor vehicle-only — no verdict.
+    assert classify_way({"highway": "residential"}) is None
+    assert classify_way({}) is None
+
+
+def test_pedestrian_underpass_wins_over_vehicle_tag():
+    # foot=yes overrides a motorway tag: an explicitly-walkable way is never "vehicle_only".
+    from safejourney.tools.pedestrian_hazards import classify_way, _is_underpass
+
+    assert classify_way({"highway": "motorway", "foot": "yes"}) == "pedestrian"
+    assert _is_underpass({"tunnel": "yes"}) is True
+    assert _is_underpass({"highway": "trunk"}) is False
+
+
 # ---- GDACS regional snap (#4 fix) ----
 
 def test_gdacs_snapped_onto_route_and_scaled(monkeypatch):

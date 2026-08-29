@@ -22,6 +22,7 @@ _MODE_EXPOSURE: dict[str, dict[HazardType, float]] = {
         HazardType.UNSAFE_AREA: 1.5,
         HazardType.HEAT: 1.4,
         HazardType.POTHOLE: 0.6,
+        HazardType.NO_FOOTPATH: 1.5,   # only a pedestrian cares that there's no footpath
     },
     "two_wheeler": {
         HazardType.FLOOD: 1.5,
