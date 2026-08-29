@@ -129,7 +129,11 @@ function fmtAhead(m) {
 }
 // Phrase a route step as a spoken turn-by-turn line, optionally with a lead-in distance.
 function navLine(instruction, meters) {
-  const instr = (instruction || "Continue ahead").trim();
+  let instr = (instruction || "Continue ahead").trim();
+  // Trim Google's verbose landmark tails so the spoken line stays short and clear.
+  instr = instr.split(/\s+Pass by\s+/i)[0];        // "…onto MG Rd Pass by the shop" → "…onto MG Rd"
+  instr = instr.replace(/\s*\([^)]*\)/g, "").trim(); // drop "(on the right)" style hints
+  if (!instr) instr = "Continue ahead";
   if (!meters) return instr;
   const rounded = meters >= 1000 ? `${(meters / 1000).toFixed(1)} kilometers` : `${Math.round(meters / 10) * 10} meters`;
   return `In ${rounded}, ${instr.charAt(0).toLowerCase()}${instr.slice(1)}`;
