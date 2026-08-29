@@ -59,6 +59,10 @@ function fmtAhead(m) {
   if (m == null) return "";
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 }
+function fmtStepDist(m) {
+  if (!m) return "";
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
 
 export default function App() {
   const [phase, setPhase] = useState("plan"); // plan | routes | active
@@ -80,6 +84,7 @@ export default function App() {
   const [alerts, setAlerts] = useState([]);
   const [harbors, setHarbors] = useState([]);
   const [essentials, setEssentials] = useState([]);
+  const [pedFeatures, setPedFeatures] = useState([]);
   const [webAdvisories, setWebAdvisories] = useState([]);
   const [webBusy, setWebBusy] = useState(false);
   const [mobility, setMobility] = useState(null);
@@ -124,6 +129,22 @@ export default function App() {
 
   const selectedRoute =
     plan?.routes?.find((r) => r.route_id === selectedRouteId) || plan?.routes?.[0];
+
+  // Walk mode: fetch pedestrian infrastructure (foot-over-bridges, crossings, underpasses)
+  // for the selected route so the map can mark where to cross safely.
+  const selectedPolyline = selectedRoute?.encoded_polyline;
+  useEffect(() => {
+    if (phase !== "routes" || mode !== "walk" || !selectedPolyline) {
+      setPedFeatures([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .pedestrianRoute(selectedPolyline)
+      .then((r) => { if (!cancelled) setPedFeatures(r.features || []); })
+      .catch(() => { if (!cancelled) setPedFeatures([]); });
+    return () => { cancelled = true; };
+  }, [phase, mode, selectedPolyline]);
 
   const onMapClick = useCallback(
     (ll) => {
@@ -492,6 +513,7 @@ export default function App() {
     setAlerts([]);
     setHarbors([]);
     setEssentials([]);
+    setPedFeatures([]);
     setWebAdvisories([]);
     setMobility(null);
     setPosition(null);
@@ -500,7 +522,8 @@ export default function App() {
 
   function pushToast(title, msg, color) {
     const id = Math.random().toString(36).slice(2);
-    setToasts((t) => [...t, { id, title, msg, color }]);
+    // Keep at most 2 on screen — a new toast drops the oldest so they don't stack up.
+    setToasts((t) => [...t, { id, title, msg, color }].slice(-2));
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
   }
 
@@ -568,6 +591,8 @@ export default function App() {
               busy={busy}
               webAdvisories={webAdvisories}
               webBusy={webBusy}
+              mode={mode}
+              pedFeatures={pedFeatures}
             />
           )}
 
@@ -606,6 +631,7 @@ export default function App() {
         hazards={hazards}
         harbors={harbors}
         essentials={essentials}
+        pedFeatures={phase === "routes" && mode === "walk" ? pedFeatures : []}
         webAdvisories={phase === "prep" || phase === "routes" || phase === "active" ? webAdvisories : []}
         origin={phase !== "active" ? origin : trip?.origin}
         destination={phase !== "active" ? destination : trip?.destination}
@@ -929,7 +955,9 @@ function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
   );
 }
 
-function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy }) {
+function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy, mode, pedFeatures = [] }) {
+  const steps = selectedRoute?.meta?.steps || [];
+  const isWalk = mode === "walk";
   return (
     <>
       <AgentNote agent={plan.agent} />
@@ -978,6 +1006,47 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
                 </span>
               ))}
           </div>
+        </>
+      )}
+
+      {isWalk && pedFeatures.length > 0 && (
+        <>
+          <div className="divider" />
+          <span className="section-label">Safe crossings on foot ({pedFeatures.length})</span>
+          <div className="hint" style={{ marginTop: -2 }}>
+            Foot-over-bridges, crossings and underpasses — all marked on the map.
+          </div>
+          <div className="pills">
+            {pedFeatures.slice(0, 12).map((f, i) => (
+              <span className="pill" key={i} title={f.label}>
+                {f.icon} {f.label}
+              </span>
+            ))}
+            {pedFeatures.length > 12 && (
+              <span className="pill" style={{ opacity: 0.7 }}>
+                +{pedFeatures.length - 12} more
+              </span>
+            )}
+          </div>
+        </>
+      )}
+
+      {isWalk && steps.length > 0 && (
+        <>
+          <div className="divider" />
+          <span className="section-label">Walking directions</span>
+          <ol className="directions">
+            {steps.map((s, i) => (
+              <li key={i}>
+                <span className="dir-text">
+                  {s.icon ? `${s.icon} ` : ""}{s.instruction}
+                </span>
+                {s.distance_m > 0 && (
+                  <span className="dir-dist">{fmtStepDist(s.distance_m)}</span>
+                )}
+              </li>
+            ))}
+          </ol>
         </>
       )}
 

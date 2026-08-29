@@ -30,6 +30,14 @@ function bearingDeg(a, b) {
   return (Math.atan2(y, x) * toD + 360) % 360;
 }
 
+// Marker colour + popup hint per pedestrian-feature type.
+const PED_COLOR = { footbridge: "#7fe3c0", crossing: "#5ec8ff", underpass: "#c9a0ff" };
+const PED_HINT = {
+  footbridge: "Foot-over-bridge — cross above the traffic here.",
+  crossing: "Marked pedestrian crossing — cross here.",
+  underpass: "Pedestrian underpass / subway — cross below the road here.",
+};
+
 const TRAVELER_ICON = { walk: "🚶", two_wheeler: "🏍️", car: "🚗", transit: "🚌" };
 function travelerEl(mode) {
   const el = document.createElement("div");
@@ -55,6 +63,7 @@ export default function MapView({
   hazards = [],
   harbors = [],
   essentials = [],
+  pedFeatures = [],
   webAdvisories = [],
   origin,
   destination,
@@ -232,6 +241,10 @@ export default function MapView({
     // the traveller (position) has its own marker + effect so it can move smoothly
     harbors.forEach((h) => addLabeled([h.lng, h.lat], marker("#f0b429", "🛟", 24), h.name || h.label, h.why));
     essentials.forEach((e) => addLabeled([e.lng, e.lat], marker("#8ad6ff", e.icon || "🛒", 22), e.name || e.label, e.why));
+    // Pedestrian infrastructure on a walking route — where to cross safely.
+    pedFeatures.forEach((f) =>
+      addLabeled([f.lng, f.lat], marker(PED_COLOR[f.type] || "#7fe3c0", f.icon || "🚶", 22),
+        f.label, PED_HINT[f.type] || "Safe place to cross on foot."));
     webAdvisories.forEach((a) => {
       const when = a.date ? ` · reported ${fmtReportDate(a.date)}` : "";
       addLabeled([a.lng, a.lat], marker("#c9a227", "🌐", 22),
@@ -249,7 +262,7 @@ export default function MapView({
       });
       markersRef.current.push(m);
     }
-  }, [origin, destination, harbors, essentials, webAdvisories]);
+  }, [origin, destination, harbors, essentials, pedFeatures, webAdvisories]);
 
   // the moving traveller — a dedicated marker updated in place so it glides during the
   // simulated drive (mode icon: walk / bike / car / bus). Kept out of the markers effect

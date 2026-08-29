@@ -429,6 +429,51 @@ input:focus {
   transform: rotate(45deg);
 }
 
+/* ---------- walking directions ---------- */
+.directions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  counter-reset: step;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.directions li {
+  counter-increment: step;
+  position: relative;
+  padding: 8px 8px 8px 30px;
+  font-size: 13px;
+  color: var(--ink-mid);
+  line-height: 1.45;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.directions li:last-child { border-bottom: 0; }
+.directions li::before {
+  content: counter(step);
+  position: absolute;
+  left: 2px;
+  top: 8px;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  color: var(--ink-mid);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dir-text { flex: 1; }
+.dir-dist { color: var(--ink-soft); font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
+
 /* ---------- alert feed ---------- */
 .alert {
   border: 1px solid var(--line-strong);

@@ -44,6 +44,8 @@ export const api = {
     req("/safe-harbors/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
   essentialsRoute: (encoded_polyline) =>
     req("/essentials/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
+  pedestrianRoute: (encoded_polyline) =>
+    req("/pedestrian/route", { method: "POST", body: JSON.stringify({ encoded_polyline }) }),
   reportIncident: (body) =>
     req("/incidents", { method: "POST", body: JSON.stringify(body) }),
   webAdvisories: (body) =>

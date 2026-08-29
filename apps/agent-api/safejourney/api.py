@@ -202,6 +202,16 @@ def essentials_route(req: RoutePlacesReq) -> dict:
     return {"essentials": find_essentials_route(decode_polyline(req.encoded_polyline))}
 
 
+@app.post("/pedestrian/route")
+def pedestrian_route(req: RoutePlacesReq) -> dict:
+    """Pedestrian infrastructure on a walking route — foot-over-bridges, zebra/signalled
+    crossings and pedestrian underpasses — for marking on the map (walk mode)."""
+    from safejourney_shared.geo import decode_polyline
+    from .tools.pedestrian_features import pedestrian_features
+
+    return {"features": pedestrian_features(decode_polyline(req.encoded_polyline))}
+
+
 @app.get("/mobility")
 def mobility(lat: float, lng: float, dlat: float | None = None, dlng: float | None = None) -> dict:
     """Alternative ways to continue safely: cab deep-links, transit, nearest station."""

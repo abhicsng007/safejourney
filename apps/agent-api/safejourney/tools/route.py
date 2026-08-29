@@ -4,7 +4,9 @@ synthesizes distinct candidate routes so the pre-detection flow works without a 
 
 from __future__ import annotations
 
+import html
 import math
+import re
 
 from safejourney_shared.geo import encode_polyline, haversine_m
 
@@ -12,6 +14,56 @@ from ._http import get_json
 from ..config import get_settings
 
 _DIRECTIONS = "https://maps.googleapis.com/maps/api/directions/json"
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+# Words in a Google walking instruction that mean the step uses a specific pedestrian
+# feature — used to tag the step (and drop an icon beside it) in the written directions.
+_STEP_FEATURE = [
+    ("pedestrian overpass", ("footbridge", "🌉")),
+    ("foot over", ("footbridge", "🌉")),
+    ("footbridge", ("footbridge", "🌉")),
+    ("pedestrian bridge", ("footbridge", "🌉")),
+    ("overpass", ("footbridge", "🌉")),
+    ("underpass", ("underpass", "🚇")),
+    ("subway", ("underpass", "🚇")),
+    ("stairs", ("stairs", "🪜")),
+    ("crosswalk", ("crossing", "🦓")),
+    ("cross ", ("crossing", "🦓")),
+]
+
+
+def _strip_html(s: str) -> str:
+    """Google step instructions arrive as HTML (road names in <b>). Flatten to readable text."""
+    s = s.replace("<div", " <div")
+    return html.unescape(_TAG_RE.sub("", s)).strip()
+
+
+def _clean_steps(leg: dict) -> list[dict]:
+    """Turn a Directions leg's steps into compact turn-by-turn directions for the UI."""
+    steps: list[dict] = []
+    for st in leg.get("steps", []):
+        instr = _strip_html(st.get("html_instructions", ""))
+        if not instr:
+            continue
+        low = instr.lower()
+        feature, icon = None, None
+        for kw, (t, ic) in _STEP_FEATURE:
+            if kw in low:
+                feature, icon = t, ic
+                break
+        sl = st.get("start_location", {})
+        el = st.get("end_location", {})
+        steps.append({
+            "instruction": instr,
+            "distance_m": st.get("distance", {}).get("value", 0),
+            "duration_s": st.get("duration", {}).get("value", 0),
+            "start": {"lat": sl.get("lat"), "lng": sl.get("lng")},
+            "end": {"lat": el.get("lat"), "lng": el.get("lng")},
+            "feature": feature,
+            "icon": icon,
+        })
+    return steps
 
 _MODE_MAP = {
     "walk": "walking",
@@ -103,5 +155,6 @@ def plan_routes(
             "duration_s": leg.get("duration", {}).get("value", 0),
             "summary": r.get("summary", f"Route {i + 1}"),
             "source": "google-directions",
+            "steps": _clean_steps(leg),
         })
     return out or _fallback_routes(origin, dest)

@@ -168,6 +168,47 @@ def test_pedestrian_underpass_wins_over_vehicle_tag():
     assert _is_underpass({"highway": "trunk"}) is False
 
 
+def test_pedestrian_feature_classification():
+    from safejourney.tools.pedestrian_features import classify_feature
+
+    zebra = classify_feature({"type": "node", "tags": {"highway": "crossing", "crossing": "zebra"}})
+    assert zebra == ("crossing", "Zebra crossing", "🦓")
+
+    signal = classify_feature({"type": "node", "tags": {"highway": "crossing", "crossing": "traffic_signals"}})
+    assert signal[0] == "crossing" and signal[2] == "🚦"
+
+    fob = classify_feature({"type": "way", "tags": {"highway": "footway", "bridge": "yes"}})
+    assert fob == ("footbridge", "Foot-over-bridge", "🌉")
+
+    under = classify_feature({"type": "way", "tags": {"highway": "footway", "tunnel": "yes"}})
+    assert under[0] == "underpass"
+
+    metro = classify_feature({"type": "node", "tags": {"railway": "subway_entrance"}})
+    assert metro[0] == "underpass"
+
+    # A plain road is not a pedestrian feature.
+    assert classify_feature({"type": "way", "tags": {"highway": "primary"}}) is None
+
+
+def test_step_html_stripping_and_feature_tag():
+    from safejourney.tools.route import _clean_steps
+
+    leg = {"steps": [
+        {"html_instructions": "Turn <b>right</b> onto <b>MG Road</b>",
+         "distance": {"value": 220}, "duration": {"value": 170},
+         "start_location": {"lat": 12.97, "lng": 77.6},
+         "end_location": {"lat": 12.971, "lng": 77.601}},
+        {"html_instructions": "Use the pedestrian overpass to cross",
+         "distance": {"value": 40}, "duration": {"value": 40},
+         "start_location": {"lat": 12.971, "lng": 77.601},
+         "end_location": {"lat": 12.9712, "lng": 77.6012}},
+    ]}
+    steps = _clean_steps(leg)
+    assert steps[0]["instruction"] == "Turn right onto MG Road"
+    assert steps[0]["feature"] is None
+    assert steps[1]["feature"] == "footbridge" and steps[1]["icon"] == "🌉"
+
+
 # ---- GDACS regional snap (#4 fix) ----
 
 def test_gdacs_snapped_onto_route_and_scaled(monkeypatch):

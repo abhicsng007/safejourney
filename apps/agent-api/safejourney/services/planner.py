@@ -46,7 +46,11 @@ def score_route(
         encoded_polyline=route["encoded_polyline"],
         distance_m=route.get("distance_m", 0),
         duration_s=route.get("duration_s", 0),
-        meta={"source": route.get("source", ""), "points": route["points"]},
+        meta={
+            "source": route.get("source", ""),
+            "points": route["points"],
+            "steps": route.get("steps", []),
+        },
     )
 
 
