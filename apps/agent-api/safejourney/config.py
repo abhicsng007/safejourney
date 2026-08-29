@@ -33,7 +33,7 @@ class Settings:
     # for low-volume, high-stakes reasoning; Gemma absorbs the classification firehose.
     # Gemma is NOT served as a Vertex publisher model for generateContent, so it's called via
     # the Gemini API (AI Studio) with an API key — independent of the Vertex path Gemini uses.
-    gemma_model: str = os.getenv("GEMMA_MODEL", "gemma-3-12b-it")
+    gemma_model: str = os.getenv("GEMMA_MODEL", "gemma-4-26b-a4b-it")
     gemma_api_key: str = (
         os.getenv("GEMMA_API_KEY", "")
         or os.getenv("GOOGLE_API_KEY", "")

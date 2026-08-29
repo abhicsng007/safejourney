@@ -221,7 +221,9 @@ def _gemma_client():
     try:
         from google import genai
 
-        return genai.Client(api_key=s.gemma_api_key)
+        # Force the Gemini Developer API (generativelanguage), not Vertex — otherwise the
+        # global GOOGLE_GENAI_USE_VERTEXAI=true env routes the api_key to aiplatform and 403s.
+        return genai.Client(api_key=s.gemma_api_key, vertexai=False)
     except Exception as e:  # pragma: no cover
         print(f"[llm] gemma client init failed ({e})")
         return None
@@ -244,22 +246,21 @@ def triage_report_gemma(
         return None
     s = get_settings()
     prompt = (
-        "You classify short hazard reports from travellers in India into a fixed schema. "
-        "A traveller just reported a road hazard in their own words. Extract:\n"
-        f"- type: exactly one of {allowed_types}\n"
-        f"- severity: exactly one of {allowed_severities} (how dangerous to a two-wheeler rider "
-        "or pedestrian right now)\n"
-        "- description: one short, factual clause (<=90 chars) restating the hazard, including any "
-        "landmark the reporter mentioned\n"
-        "- confidence: 0.0-1.0, how sure you are of the type\n"
-        'Reply with ONLY a JSON object: {"type":"...","severity":"...","description":"...","confidence":0.0}. '
-        "If the text names no real road hazard, use type \"other\" and confidence below 0.4.\n\n"
-        f"Report: {text!r}"
+        "Classify this road-hazard report from a traveller in India into a fixed schema.\n"
+        f"type: exactly one of {allowed_types}\n"
+        f"severity: exactly one of {allowed_severities} (danger to a two-wheeler rider/pedestrian now)\n"
+        "description: one short factual clause (<=90 chars) restating the hazard incl. any landmark\n"
+        "confidence: 0.0-1.0 (how sure of the type). If no real road hazard, type \"other\", confidence <0.4.\n\n"
+        f"Report: {text!r}\n\n"
+        "Output ONLY a single-line JSON object, no markdown, no explanation, no preamble. Example:\n"
+        '{"type":"electrocution","severity":"critical","description":"live wire in floodwater near underpass","confidence":0.9}'
     )
     try:
         from google.genai import types
 
-        cfg = types.GenerateContentConfig(max_output_tokens=200, temperature=0.1)
+        # Gemma-4 spends output tokens on internal reasoning before emitting the JSON, so a
+        # tight budget returns empty (MAX_TOKENS). 800 leaves ample room for the object.
+        cfg = types.GenerateContentConfig(max_output_tokens=800, temperature=0.0)
         resp = client.models.generate_content(model=s.gemma_model, contents=prompt, config=cfg)
         raw = (resp.text or "").strip()
         return _parse_json_object(raw) if raw else None
