@@ -428,18 +428,27 @@ export default function App() {
       if (!s?.start || s.start.lat == null) { i++; continue; }
       const d = haversineM(position.lat, position.lng, s.start.lat, s.start.lng);
       if (d < 35) {
-        // At the maneuver: speak it plainly only if it wasn't already announced. Mark it only
-        // if the voice actually launched (speakNav yields when something else is speaking), so
-        // a yielded turn isn't lost — but advance past it either way (we've reached it).
-        if (!navPre.current.has(i) && speakNav(navLine(s.instruction, 0))) navPre.current.add(i);
-        i++;
-        continue; // steps can be close together — check the next one too
+        if (navPre.current.has(i)) { i++; continue; } // already announced — move on
+        // At the maneuver and not yet announced: speak it plainly. If speakNav yields (channel
+        // busy with a greeting/alert), DON'T advance — retry next tick so the turn isn't lost.
+        if (speakNav(navLine(s.instruction, 0))) { navPre.current.add(i); i++; continue; }
+        break;
       }
       if (d < 220 && !navPre.current.has(i)) {
         // Only mark announced if it actually spoke; otherwise retry on the next position tick.
         if (speakNav(navLine(s.instruction, d))) navPre.current.add(i);
+        break;
       }
-      break; // only reason about the nearest upcoming step
+      // Step is far (>220 m). If we've clearly passed it — the NEXT step's start is now closer
+      // — skip ahead so navigation keeps progressing (a turn missed while the channel was busy
+      // never freezes the guidance). Otherwise it's still ahead: wait.
+      const nxt = steps[i + 1];
+      if (nxt?.start && nxt.start.lat != null &&
+          haversineM(position.lat, position.lng, nxt.start.lat, nxt.start.lng) < d) {
+        i++;
+        continue;
+      }
+      break; // still upcoming but far — wait
     }
     navIdx.current = i;
 
