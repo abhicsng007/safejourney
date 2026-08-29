@@ -55,18 +55,32 @@ _OVERPASS_MIRRORS = (
 )
 
 
+# Circuit breaker: when Overpass is throttling this IP (every mirror times out), a single
+# corridor scan makes many queries and each burns the full mirror budget — stacking into
+# minute-long requests. After a couple of total failures we trip the breaker and skip Overpass
+# entirely for a cooldown, so scans stay fast (just without OSM hazards) and recover on their own.
+_ov_fail_streak = 0
+_ov_disabled_until = 0.0
+
+
 def overpass_json(query: str, timeout: float = 4.0) -> Optional[Any]:
     """POST an Overpass QL query, failing over across mirrors. Returns parsed JSON or None.
 
     Logs the failure (status / reason) so a route coming back empty is diagnosable from
     Cloud Logging instead of vanishing silently.
     """
+    global _ov_fail_streak, _ov_disabled_until
+    import time as _t
+
+    now = _t.time()
+    if now < _ov_disabled_until:
+        return None  # breaker open — don't call Overpass at all right now
     try:
         import httpx  # lazy so the package imports even without httpx installed
     except Exception:
         return None
     headers = {"User-Agent": "SafeJourney/0.1"}
-    # Bound connect separately so an unreachable mirror fails fast (3s) instead of burning the
+    # Bound connect separately so an unreachable mirror fails fast (2s) instead of burning the
     # full read budget before failing over.
     tmo = httpx.Timeout(timeout, connect=2.0)
     last = ""
@@ -74,10 +88,15 @@ def overpass_json(query: str, timeout: float = 4.0) -> Optional[Any]:
         try:
             r = httpx.post(url, data={"data": query}, timeout=tmo, headers=headers)
             if r.status_code == 200:
+                _ov_fail_streak = 0
                 return r.json()
             last = f"{url} -> HTTP {r.status_code}"
         except Exception as e:  # timeout / connection error — move to the next mirror
             last = f"{url} -> {type(e).__name__}"
+    _ov_fail_streak += 1
+    if _ov_fail_streak >= 2:
+        _ov_disabled_until = now + 120.0  # cool down 2 min before trying Overpass again
+        print(f"[overpass] tripping breaker for 120s after {_ov_fail_streak} failures", flush=True)
     print(f"[overpass] all mirrors failed; last={last}", flush=True)
     return None
 
