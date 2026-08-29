@@ -18,7 +18,7 @@
 Bonus points available: additional Google model (Gemma/Veo), a blog post, social posts.
 
 **Second Google model — Gemma (bonus, and a real architectural reason).** Free-text / voice
-crowd hazard reports are triaged into the structured hazard schema by **Gemma** (`gemma-3-12b-it`,
+crowd hazard reports are triaged into the structured hazard schema by **Gemma** (`gemma-4-26b-a4b-it`,
 `services/triage.py` → `agents/llm.py:triage_report_gemma`), so a rider can just say *"live wire
 in the water under the bridge"* and it files as `electrocution · critical`. Gemini stays reserved
 for the low-volume, high-stakes reasoning (route/reroute/shelter decisions); Gemma absorbs the

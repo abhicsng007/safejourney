@@ -1017,6 +1017,7 @@ input:focus {
 .nl-send { flex: 0 0 auto; padding: 8px 14px; }
 .nl-caption { font-size: 11px; padding-left: 2px; min-height: 15px; }
 .nl-listening { color: var(--danger); font-family: "IBM Plex Mono", monospace; }
+.nl-analyzing { color: var(--beacon); animation: nl-pulse 1.3s ease-in-out infinite; }
 .nl-result { color: var(--ink-mid); }
 .nl-via {
   font-family: "IBM Plex Mono", monospace;

@@ -245,25 +245,31 @@ def triage_report_gemma(
     if client is None:
         return None
     s = get_settings()
+    # Gemma-4 is a reasoning model: it spends output tokens "thinking" before it emits text, and
+    # the more it's asked to produce, the longer it reasons (and the likelier it blows the token
+    # budget and returns nothing). So we ask for the MINIMUM — just type + severity from a closed
+    # vocabulary — and fill description/confidence ourselves. Keeps it as fast/reliable as it gets.
     prompt = (
-        "Classify this road-hazard report from a traveller in India into a fixed schema.\n"
-        f"type: exactly one of {allowed_types}\n"
-        f"severity: exactly one of {allowed_severities} (danger to a two-wheeler rider/pedestrian now)\n"
-        "description: one short factual clause (<=90 chars) restating the hazard incl. any landmark\n"
-        "confidence: 0.0-1.0 (how sure of the type). If no real road hazard, type \"other\", confidence <0.4.\n\n"
-        f"Report: {text!r}\n\n"
-        "Output ONLY a single-line JSON object, no markdown, no explanation, no preamble. Example:\n"
-        '{"type":"electrocution","severity":"critical","description":"live wire in floodwater near underpass","confidence":0.9}'
+        f"Report: {text!r}\n"
+        "Classify this road-hazard report from a traveller in India. If it is NOT a real road "
+        'hazard, use type "other".\n'
+        f'Output ONLY a JSON object: {{"type":"<one of {"|".join(allowed_types)}>",'
+        f'"severity":"<one of {"|".join(allowed_severities)}>"}}'
     )
     try:
         from google.genai import types
 
-        # Gemma-4 spends output tokens on internal reasoning before emitting the JSON, so a
-        # tight budget returns empty (MAX_TOKENS). 800 leaves ample room for the object.
-        cfg = types.GenerateContentConfig(max_output_tokens=800, temperature=0.0)
+        cfg = types.GenerateContentConfig(max_output_tokens=768, temperature=0.0)
         resp = client.models.generate_content(model=s.gemma_model, contents=prompt, config=cfg)
         raw = (resp.text or "").strip()
-        return _parse_json_object(raw) if raw else None
+        parsed = _parse_json_object(raw) if raw else None
+        if not parsed or not parsed.get("type"):
+            return None
+        # We supply the description (the reporter's own words) and a fixed high confidence — a
+        # returned classification is a confident signal for these short, concrete reports.
+        parsed.setdefault("description", text.strip()[:90])
+        parsed.setdefault("confidence", 0.9)
+        return parsed
     except Exception as e:  # pragma: no cover
         print(f"[llm] gemma triage failed ({e})")
         return None

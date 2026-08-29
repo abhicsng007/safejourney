@@ -1470,7 +1470,9 @@ function NaturalReport({ onReport }) {
         </button>
       </div>
       <div className="nl-caption">
-        {listening ? (
+        {busy ? (
+          <span className="nl-analyzing">🧠 Gemma is classifying your report…</span>
+        ) : listening ? (
           <span className="nl-listening">● Listening…</span>
         ) : result ? (
           <span className="nl-result">
