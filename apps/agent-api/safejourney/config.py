@@ -64,7 +64,7 @@ class Settings:
     default_interval_s: int = int(os.getenv("DEFAULT_INTERVAL_S", "180"))
     min_interval_s: int = int(os.getenv("MIN_INTERVAL_S", "45"))
     max_interval_s: int = int(os.getenv("MAX_INTERVAL_S", "900"))
-    hazard_cache_ttl_s: int = int(os.getenv("HAZARD_CACHE_TTL_S", "300"))
+    hazard_cache_ttl_s: int = int(os.getenv("HAZARD_CACHE_TTL_S", "900"))
 
     @property
     def gemini_available(self) -> bool:

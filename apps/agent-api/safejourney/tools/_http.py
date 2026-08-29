@@ -52,11 +52,10 @@ def post_json(url: str, json: dict, headers: Optional[dict] = None, timeout: flo
 _OVERPASS_MIRRORS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://lz4.overpass-api.de/api/interpreter",
 )
 
 
-def overpass_json(query: str, timeout: float = 6.0) -> Optional[Any]:
+def overpass_json(query: str, timeout: float = 4.0) -> Optional[Any]:
     """POST an Overpass QL query, failing over across mirrors. Returns parsed JSON or None.
 
     Logs the failure (status / reason) so a route coming back empty is diagnosable from
@@ -69,7 +68,7 @@ def overpass_json(query: str, timeout: float = 6.0) -> Optional[Any]:
     headers = {"User-Agent": "SafeJourney/0.1"}
     # Bound connect separately so an unreachable mirror fails fast (3s) instead of burning the
     # full read budget before failing over.
-    tmo = httpx.Timeout(timeout, connect=3.0)
+    tmo = httpx.Timeout(timeout, connect=2.0)
     last = ""
     for url in _OVERPASS_MIRRORS:
         try:
