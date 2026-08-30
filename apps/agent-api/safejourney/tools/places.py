@@ -14,6 +14,47 @@ from ._http import post_json
 from ..config import get_settings
 
 _PLACES_NEARBY = "https://places.googleapis.com/v1/places:searchNearby"
+_PLACES_TEXT = "https://places.googleapis.com/v1/places:searchText"
+
+
+def find_places_text(query: str, lat: float, lng: float, radius_m: int = 2500, limit: int = 6) -> list[dict]:
+    """Free-text place search near a point — 'drinking water', 'food', 'ATM', 'pharmacy',
+    'restroom', 'tea'… Returns the closest matches with name, distance and address. Keyless
+    fallback returns [] (the caller words a graceful 'couldn't search' reply)."""
+    s = get_settings()
+    q = (query or "").strip()
+    if not q or not s.maps_api_key:
+        return []
+    body = {
+        "textQuery": q,
+        "locationBias": {
+            "circle": {"center": {"latitude": lat, "longitude": lng}, "radius": float(radius_m)}
+        },
+        "maxResultCount": limit,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": s.maps_api_key,
+        "X-Goog-FieldMask": "places.displayName,places.location,places.primaryType,places.formattedAddress",
+    }
+    data = post_json(_PLACES_TEXT, json=body, headers=headers, timeout=8.0)
+    places = (data or {}).get("places", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for p in places:
+        loc = p.get("location", {})
+        plat, plng = loc.get("latitude"), loc.get("longitude")
+        if plat is None:
+            continue
+        out.append({
+            "name": p.get("displayName", {}).get("text", q.title()),
+            "type": p.get("primaryType", ""),
+            "lat": plat,
+            "lng": plng,
+            "distance_m": round(haversine_m(lat, lng, plat, plng)),
+            "address": p.get("formattedAddress", ""),
+        })
+    out.sort(key=lambda x: x["distance_m"])
+    return out[:limit]
 
 # Ranked by how good a refuge each is (staffed, sheltered, lit, open late).
 _HARBOR_TYPES = [

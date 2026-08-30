@@ -16,6 +16,7 @@ from ..services import trips as trips_svc
 from ..services.monitor import evaluate_trip as _evaluate_trip
 from ..tools.hazard_scan import scan_corridor
 from ..tools.places import find_safe_harbors as _find_safe_harbors
+from ..tools.places import find_places_text as _find_places_text
 from ..tools.mobility import mobility_options as _mobility_options
 from ..services.precautions import precautions_for
 
@@ -81,6 +82,21 @@ def get_mobility_options(lat: float, lng: float, dest_lat: float = 0.0, dest_lng
     return _mobility_options(lat, lng, dlat, dlng)
 
 
+def find_nearby(query: str, lat: float, lng: float) -> dict:
+    """Find nearby places where the traveller can GET something they asked for — water, food,
+    a meal/snack, a pharmacy or medicine, an ATM/cash, fuel, a restroom, tea/coffee, a repair
+    shop, etc. — around their current location. Use this whenever the user asks where to get,
+    buy, or find anything. Returns the closest matches with name, distance (metres) and address.
+
+    Args:
+        query: What they want, in plain words, e.g. "drinking water", "food", "pharmacy",
+            "ATM", "public toilet", "tea", "petrol pump".
+        lat: The traveller's current latitude (from the trip context).
+        lng: The traveller's current longitude (from the trip context).
+    """
+    return {"query": query, "places": _find_places_text(query, lat, lng)}
+
+
 def check_trip_now(trip_id: str) -> dict:
     """Run one live safety evaluation of an active trip's road ahead, right now.
 
@@ -124,6 +140,7 @@ ALL_TOOLS = [
     plan_safe_routes,
     scan_route_hazards,
     get_safe_harbors,
+    find_nearby,
     get_mobility_options,
     check_trip_now,
     get_precautions,

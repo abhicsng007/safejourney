@@ -57,9 +57,15 @@ Delegate to your specialists:
 - Mobility when the plan must change (transit/cab).
 - SOS for danger and escalation.
 
-Use tools to ground every claim in real data — never invent hazards. Interrupt only when it
-matters; be brief, specific, and lead with the action. Speak the traveller's language if they
-switch. When conditions are dangerous, prioritise their safety over saving time."""
+When the traveller asks where to GET or FIND anything — water, food, a meal, a pharmacy or
+medicine, an ATM/cash, fuel, a restroom, tea/coffee, a repair shop — call find_nearby with a
+plain-words query and the traveller's CURRENT position from the CONTEXT block, then reply with
+the two or three closest options: name, how far, and direction if useful. Don't ask for their
+location; it's in the context.
+
+Use tools to ground every claim in real data — never invent hazards or places. Interrupt only
+when it matters; be brief, specific, and lead with the action. Speak the traveller's language if
+they switch. When conditions are dangerous, prioritise their safety over saving time."""
 
 
 @lru_cache
@@ -72,6 +78,7 @@ def build_guardian():
         plan_safe_routes,
         scan_route_hazards,
         get_safe_harbors,
+        find_nearby,
         get_mobility_options,
         check_trip_now,
         get_precautions,
@@ -102,7 +109,7 @@ def build_guardian():
         instruction=CORE_INSTRUCTION,
         sub_agents=[prep, route_guardian, safe_harbor, mobility, sos],
         tools=[plan_safe_routes, scan_route_hazards, check_trip_now,
-               get_safe_harbors, get_mobility_options, get_precautions, report_incident],
+               get_safe_harbors, find_nearby, get_mobility_options, get_precautions, report_incident],
     )
     return guardian
 

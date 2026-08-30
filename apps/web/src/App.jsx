@@ -813,8 +813,17 @@ export default function App() {
 
   async function injectHazard(h) {
     if (!trip) return;
+    // Drop it a little AHEAD of where the traveller is now (so it's immediately relevant and
+    // will trigger a real proximity warning), instead of a fixed mid-route point.
+    let atFraction = 0.55;
+    if (navTrack && position) {
+      const along = projectAlong(navTrack.coords, navTrack.cum, position.lat, position.lng);
+      const frac = along / (navTrack.total || 1);
+      atFraction = Math.min(0.92, Math.max(0.05, frac + 0.06)); // ~a few hundred m ahead
+    }
+    pushToast(`${HAZARD_ICON[h.type] || "❗"} Injecting ${hazardLabel(h.type)}…`, "Demo hazard placed on the road ahead — Guardian will pick it up.", "#f0b429");
     try {
-      await api.forceHazard(trip.id, h.type, h.severity);
+      await api.forceHazard(trip.id, h.type, h.severity, atFraction);
       await api.evaluate(trip.id);
       await refresh(trip.id);
     } catch (e) {
@@ -1800,8 +1809,9 @@ function GuardianChat({ trip }) {
 
   const suggestions = [
     "Is my route safe right now?",
+    "Where can I get water or food nearby?",
     "Find me a safe place to wait",
-    "What should I do if it floods ahead?",
+    "Nearest ATM and pharmacy?",
   ];
 
   return (
