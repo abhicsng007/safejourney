@@ -15,6 +15,47 @@
   --danger: #ff6150;
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 18px 44px -20px rgba(0, 0, 0, 0.7);
   --radius: 16px;
+  --amb: transparent; /* map ambient tint, set per weather theme below */
+}
+
+/* ---------- weather-reactive ambient theme ----------
+   <html data-weather="..."> is set from the live conditions; each block shifts the palette's
+   mood (and a soft map tint) while keeping text on the same readable --ink. */
+:root[data-weather="cloudy"] {
+  --ground: #0b1519; --surface: #101d22; --surface-2: #152730; --surface-3: #1a323b;
+  --amb: rgba(150, 165, 170, 0.10);
+}
+:root[data-weather="rain"] {
+  --ground: #07121c; --surface: #0c1a28; --surface-2: #102338; --surface-3: #153048;
+  --beacon: #4aa8ff; --beacon-deep: #1f6fb0; --amb: rgba(60, 120, 200, 0.16);
+}
+:root[data-weather="storm"] {
+  --ground: #0a0d1c; --surface: #111533; --surface-2: #171c40; --surface-3: #1e2450;
+  --beacon: #9b8cff; --beacon-deep: #5b4fd0; --amb: rgba(90, 70, 180, 0.22);
+}
+:root[data-weather="fog"] {
+  --ground: #121a1d; --surface: #1a252a; --surface-2: #243036; --surface-3: #2d3a41;
+  --ink-soft: #93a6a6; --beacon: #8fb2b8; --beacon-deep: #5f7d82;
+  --amb: rgba(185, 195, 195, 0.18);
+}
+:root[data-weather="smog"] {
+  --ground: #16120b; --surface: #231c11; --surface-2: #2e2416; --surface-3: #3a2e1c;
+  --beacon: #e0a94a; --beacon-deep: #a5761f; --amb: rgba(190, 140, 60, 0.22);
+}
+:root[data-weather="heat"] {
+  --ground: #1a0f08; --surface: #29180e; --surface-2: #361f12; --surface-3: #432817;
+  --beacon: #ff9a3d; --beacon-deep: #c25e12; --amb: rgba(230, 120, 40, 0.18);
+}
+:root[data-weather="snow"] {
+  --ground: #0e1519; --surface: #152229; --surface-2: #1d2f38; --surface-3: #243b45;
+  --beacon: #9fd8ff; --beacon-deep: #4f93c0; --amb: rgba(180, 210, 235, 0.16);
+}
+/* Smooth the palette swap when conditions change. */
+body,
+.panel,
+.cond-card,
+.legend {
+  transition: background-color 0.9s ease, color 0.9s ease, border-color 0.9s ease;
 }
 
 * {
@@ -72,6 +113,17 @@ button {
 .map {
   position: absolute;
   inset: 0;
+}
+/* Weather-reactive wash over the basemap — kept subtle and click-through, below the
+   overlays (conditions card / legend sit at z-index 10). */
+.map-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--amb, transparent);
+  transition: background-color 0.9s ease;
 }
 @media (max-width: 820px) {
   .app {

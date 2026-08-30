@@ -128,6 +128,29 @@ function mergeHazards(routeHz, liveHz) {
   for (const h of liveHz || []) by.set(hazardKey(h), h);
   return [...by.values()];
 }
+// Pick an ambient theme key from the live conditions so the whole app tints to match what
+// it's like outside — active weather wins, then low visibility, then bad air, then heat.
+// Drives the CSS variable overrides in styles.css via <html data-weather="...">.
+function weatherTheme(conditions) {
+  if (!conditions || conditions.source === "unavailable") return "clear";
+  const w = conditions.weather, v = conditions.visibility, a = conditions.aqi;
+  const code = w?.code ?? -1;
+  const isThunder = code >= 95;
+  const isRain = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
+  const isSnow = (code >= 71 && code <= 77) || code === 85 || code === 86;
+  const isFogCode = code === 45 || code === 48;
+  const lowVis = v && (v.level === "poor" || v.level === "moderate");
+  const badAir = a && (a.level === "poor" || a.level === "bad");
+  const hot = w && w.temp_c >= 38;
+  if (isThunder) return "storm";
+  if (isRain) return "rain";
+  if (isSnow) return "snow";
+  if (isFogCode || lowVis) return "fog";
+  if (badAir) return "smog";
+  if (hot) return "heat";
+  if (code >= 1 && code <= 3) return "cloudy";
+  return "clear";
+}
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, toR = Math.PI / 180;
   const dphi = (lat2 - lat1) * toR, dl = (lng2 - lng1) * toR;
@@ -315,6 +338,11 @@ export default function App() {
   const arrivedSpoken = useRef(false);
   const simSpeedRef = useRef(0);     // m/s during Simulate Drive; 0 otherwise
   const [navCue, setNavCue] = useState(null);
+
+  // Ambient theme: tint the whole app to the live weather / visibility / air quality.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-weather", weatherTheme(conditions));
+  }, [conditions]);
 
   // health check
   useEffect(() => {
