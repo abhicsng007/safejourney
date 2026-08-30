@@ -7,13 +7,10 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
 REGION="${REGION:-us-central1}"
 MAPS_KEY="${MAPS_KEY:-}"
-# SafeJourney runs on Gemini 3.x. For most projects the 3.x models are served ONLY by the
-# Gemini Developer API (AI Studio), NOT as Vertex publisher models — so we run the API-key path:
-# GOOGLE_GENAI_USE_VERTEXAI=false + GEMINI_API_KEY. gemini-3.7-flash is newest but flaky (503);
-# 3.6-flash is the latest stable at time of writing.
-MODEL="${GEMINI_MODEL:-gemini-3.6-flash}"
-GEMINI_API_KEY="${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}"   # AI Studio key for Gemini 3.x
-USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-false}"          # false → Developer API (needed for 3.x)
+# SafeJourney runs on Gemini 3.x via Vertex on the `global` location — regional Vertex
+# endpoints 404 on 3.x, but `global` serves them with full (non-free-tier) quota.
+MODEL="${GEMINI_MODEL:-gemini-3.7-flash}"
+GEMINI_LOCATION="${GEMINI_LOCATION:-global}"   # Vertex location Gemini 3.x is served from
 FCM_ENABLED="${FCM_ENABLED:-false}"   # set true once Firebase Cloud Messaging is configured
 WEB_APP_URL="${WEB_APP_URL:-}"        # deployed PWA URL, so a push click deep-links back
 REPO="safejourney"
@@ -24,7 +21,7 @@ echo "== Building images with Cloud Build =="
 gcloud builds submit --config cloudbuild.yaml \
   --substitutions "_REGION=${REGION},_REPO=${REPO}" .
 
-COMMON_ENV="GCP_PROJECT=${PROJECT_ID},GCP_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=${USE_VERTEXAI},GOOGLE_API_KEY=${GEMINI_API_KEY},USE_FIRESTORE=true,FIRESTORE_PROJECT=${PROJECT_ID},GEMINI_MODEL=${MODEL},FCM_ENABLED=${FCM_ENABLED},WEB_APP_URL=${WEB_APP_URL},GOOGLE_MAPS_API_KEY=${MAPS_KEY}"
+COMMON_ENV="GCP_PROJECT=${PROJECT_ID},GCP_LOCATION=${REGION},GOOGLE_GENAI_USE_VERTEXAI=true,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${GEMINI_LOCATION},GEMINI_LOCATION=${GEMINI_LOCATION},USE_FIRESTORE=true,FIRESTORE_PROJECT=${PROJECT_ID},GEMINI_MODEL=${MODEL},FCM_ENABLED=${FCM_ENABLED},WEB_APP_URL=${WEB_APP_URL},GOOGLE_MAPS_API_KEY=${MAPS_KEY}"
 
 echo "== Deploying agent-api =="
 gcloud run deploy safejourney-api \

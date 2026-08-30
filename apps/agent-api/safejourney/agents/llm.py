@@ -21,7 +21,8 @@ def _client():
         from google import genai
 
         if s.use_vertex and s.gcp_project:
-            return genai.Client(vertexai=True, project=s.gcp_project, location=s.gcp_location)
+            # Gemini 3.x is served only on the `global` Vertex location for this project.
+            return genai.Client(vertexai=True, project=s.gcp_project, location=s.gemini_location)
         if s.gemini_api_key:
             return genai.Client(api_key=s.gemini_api_key)
     except Exception as e:  # pragma: no cover
