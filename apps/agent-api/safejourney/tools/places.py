@@ -202,10 +202,10 @@ def find_safe_harbors(lat: float, lng: float, radius_m: int = 1200, limit: int =
 
 # --- route-corridor variants: cover the WHOLE path, not just one point ---
 
-def _sample_route(points: list[tuple[float, float]], step_m: float = 1500.0, max_samples: int = 10):
+def _sample_route(points: list[tuple[float, float]], step_m: float = 1000.0, max_samples: int = 16):
     """Evenly-spaced query anchors along the route so places are found the whole way.
-    Anchors ~1.5 km apart (≈ the per-anchor search radius) keep coverage continuous through the
-    middle of the route instead of only sampling near the ends."""
+    Anchors ~1 km apart keep the search circles overlapping through the middle of the route, so a
+    place near the path is found wherever it is — not only near the ends."""
     sampled = [(la, ln) for la, ln, _ in sample_polyline(points, step_m=step_m)]
     if len(sampled) <= max_samples:
         return sampled
@@ -223,45 +223,30 @@ def _dedupe_places(items: list[dict], round_dp: int = 4) -> list[dict]:
     return list(best.values())
 
 
-def _along_route(points, finder, radius_m, per_point, total_limit) -> list[dict]:
+def _along_route(points, finder, radius_m, per_point, total_limit, max_off_m) -> list[dict]:
     if not points:
         return []
     anchors = _sample_route(points)
-    with ThreadPoolExecutor(max_workers=min(6, len(anchors))) as pool:
+    with ThreadPoolExecutor(max_workers=min(8, len(anchors))) as pool:
         lists = pool.map(lambda p: finder(p[0], p[1], radius_m, per_point), anchors)
     merged = [x for lst in lists for x in (lst or [])]
-    # Re-express distance as metres from the route line, and how far ALONG the route each place
-    # sits, so we can both rank by nearness and spread the picks over the whole path.
-    from safejourney_shared.geo import point_near_polyline_m, distance_along_polyline_m, haversine_m
+    # Re-express distance as metres from the route LINE, and how far ALONG the route each place
+    # sits (so we can drop anything off-path and keep the rest ordered by position on the route).
+    from safejourney_shared.geo import point_near_polyline_m, distance_along_polyline_m
 
     for x in merged:
         x["distance_m"] = round(point_near_polyline_m(x["lat"], x["lng"], points))
         x["_along"] = distance_along_polyline_m(x["lat"], x["lng"], points)
-    out = _dedupe_places(merged)
+    # Keep only places genuinely NEAR the path — never show one that's off across town.
+    out = [x for x in _dedupe_places(merged) if x["distance_m"] <= max_off_m]
+    out.sort(key=lambda x: x["_along"])
     if len(out) <= total_limit:
-        out.sort(key=lambda x: x["_along"])
         return [_strip_along(x) for x in out]
-
-    # Spread across the route: split its length into total_limit bins by along-distance and keep
-    # the closest-to-line place in each. Without this, dense start/end clusters (many POIs right
-    # on the line) fill the whole limit and the middle of the route shows nothing.
-    route_len = sum(
-        haversine_m(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1])
-        for i in range(1, len(points))
-    ) or 1.0
-    bins: dict[int, dict] = {}
-    for x in out:
-        b = min(total_limit - 1, int(x["_along"] / route_len * total_limit))
-        if b not in bins or x["distance_m"] < bins[b]["distance_m"]:
-            bins[b] = x
-    chosen = list(bins.values())
-    # Backfill any unused slots (empty bins on sparse stretches) with the next-closest places.
-    if len(chosen) < total_limit:
-        picked = {id(x) for x in chosen}
-        rest = sorted((x for x in out if id(x) not in picked), key=lambda x: x["distance_m"])
-        chosen += rest[: total_limit - len(chosen)]
-    chosen.sort(key=lambda x: x["_along"])
-    return [_strip_along(x) for x in chosen]
+    # More near-path places than we want to plot: thin EVENLY by position along the route so the
+    # ones we keep stay spread over the whole journey (dense stretches don't crowd out the rest),
+    # without inventing gaps where places actually exist.
+    idx = sorted({round(i * (len(out) - 1) / (total_limit - 1)) for i in range(total_limit)})
+    return [_strip_along(out[i]) for i in idx]
 
 
 def _strip_along(x: dict) -> dict:
@@ -269,11 +254,17 @@ def _strip_along(x: dict) -> dict:
     return x
 
 
-def find_safe_harbors_route(points, radius_m: int = 1200, per_point: int = 4, total_limit: int = 14) -> list[dict]:
-    """Safe harbours spread along the entire route corridor (not just near the origin)."""
-    return _along_route(points, find_safe_harbors, radius_m, per_point, total_limit)
+def find_safe_harbors_route(
+    points, radius_m: int = 1200, per_point: int = 5, total_limit: int = 16, max_off_m: int = 900
+) -> list[dict]:
+    """Safe harbours near the whole route corridor. A refuge a little off the line is still
+    useful (you'd divert to it), so the off-path cutoff is looser than for essentials."""
+    return _along_route(points, find_safe_harbors, radius_m, per_point, total_limit, max_off_m)
 
 
-def find_essentials_route(points, radius_m: int = 1500, per_point: int = 4, total_limit: int = 18) -> list[dict]:
-    """Journey essentials (pharmacy/fuel/ATM/store) spread along the entire route corridor."""
-    return _along_route(points, find_essentials, radius_m, per_point, total_limit)
+def find_essentials_route(
+    points, radius_m: int = 1000, per_point: int = 6, total_limit: int = 20, max_off_m: int = 450
+) -> list[dict]:
+    """Journey essentials (pharmacy/fuel/ATM/store) right along the route — kept close to the
+    path (you grab these in passing), found the whole way, not only at the ends."""
+    return _along_route(points, find_essentials, radius_m, per_point, total_limit, max_off_m)

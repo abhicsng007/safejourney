@@ -608,6 +608,10 @@ export default function App() {
     const along = navTrack
       ? projectAlong(navTrack.coords, navTrack.cum, position.lat, position.lng)
       : 0;
+    // Collect the hazards that newly enter the warning window THIS tick, then speak ONE
+    // consolidated line for them — several separate speakNav calls in the same tick used to
+    // cut each other off (garbled, overlapping narration) when hazards clustered together.
+    const spokeNow = [];
     proxHazards.forEach((h, i) => {
       const key = `${h.type}:${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`;
       // A web advisory of unknown category reads better as "Advisory" than "Other".
@@ -626,18 +630,27 @@ export default function App() {
           h._web ? "#c9a227" : "#ff8a3d"
         );
       }
-      // Voice it too — including during a compressed sim. A hazard warning outranks a turn
-      // cue, so on a sped-up run it replaces the current line instead of queueing behind it
-      // (queueing is what used to make guidance lag the car); each hazard still speaks once.
       if (voiceOn && inWindow && !spokenProx.current.has(key)) {
         spokenProx.current.add(key);
-        const m = Math.round(Math.max(0, ahead) / 10) * 10;
-        const spoken = h._web
-          ? `Heads up. ${label} reported${h.locality ? ` in ${h.locality}` : ""}, about ${m} meters ahead.`
-          : `Caution, ${label.toLowerCase()} about ${m} meters ahead. Slow down.`;
-        speakNav(spoken, { replace: fast });
+        spokeNow.push({ label, ahead: Math.max(0, ahead), locality: h.locality, web: h._web });
       }
     });
+    if (voiceOn && spokeNow.length) {
+      spokeNow.sort((a, b) => a.ahead - b.ahead);
+      const near = spokeNow[0];
+      const m = Math.round(near.ahead / 10) * 10;
+      let line;
+      if (spokeNow.length === 1) {
+        line = near.web
+          ? `Heads up. ${near.label} reported${near.locality ? ` in ${near.locality}` : ""}, about ${m} meters ahead.`
+          : `Caution, ${near.label.toLowerCase()} about ${m} meters ahead. Slow down.`;
+      } else {
+        const kinds = [...new Set(spokeNow.map((w) => w.label.toLowerCase()))];
+        const list = kinds.length <= 2 ? kinds.join(" and ") : `${kinds.slice(0, 2).join(", ")} and more`;
+        line = `Caution. ${list} ahead${near.locality ? ` near ${near.locality}` : ""}, starting about ${m} meters. Stay alert.`;
+      }
+      speakNav(line, { replace: fast });
+    }
   }, [position, proxHazards, hazardAlongs, navTrack, phase, voiceOn]);
 
   // Turn-by-turn: trigger off distance ALONG the polyline. Live GPS speaks ahead +
@@ -1030,9 +1043,9 @@ export default function App() {
 
   function pushToast(title, msg, color) {
     const id = Math.random().toString(36).slice(2);
-    // Keep the most recent few — enough that a burst of hazards near one spot doesn't silently
-    // drop the ones you most need to see, but not so many they bury the map.
-    setToasts((t) => [...t, { id, title, msg, color }].slice(-4));
+    // Keep at most 3 on screen so a cluster doesn't bury the map or overlap the narration; the
+    // spoken cue for a burst is consolidated into one line separately.
+    setToasts((t) => [...t, { id, title, msg, color }].slice(-3));
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
   }
 
