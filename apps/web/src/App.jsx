@@ -563,6 +563,27 @@ export default function App() {
     [trip?.encoded_polyline, selectedRoute?.encoded_polyline, navSteps]
   );
 
+  // Hazards the proximity alert watches during the drive = the route's detected hazards PLUS
+  // web-grounded advisories that geocoded onto the route (Burari waterlogging, roadwork,
+  // sewage-on-carriageway…). Those carry route-snapped lat/lng, so folding them in here is what
+  // makes real, locally-known trouble actually warn during narration — not just sit on the
+  // prep screen. Deduped against the detected hazards by type+location.
+  const proxHazards = useMemo(() => {
+    if (phase !== "active") return hazards;
+    const webHz = (webAdvisories || [])
+      .filter((a) => a.lat != null && a.lng != null)
+      .map((a) => ({
+        type: a.type || "other",
+        severity: a.severity || "moderate",
+        lat: a.lat,
+        lng: a.lng,
+        description: a.summary || `${hazardLabel(a.type)} reported near ${a.locality || "your route"}.`,
+        locality: a.locality,
+        _web: true,
+      }));
+    return webHz.length ? mergeHazards(hazards, webHz) : hazards;
+  }, [phase, hazards, webAdvisories]);
+
   // Each hazard's distance ALONG the route (metres from origin), projected onto the same
   // polyline the traveller drives. Computed once per hazard/route change — not per frame —
   // and never derived from the hazard's own distance_along_m (a snapshot measures that from
@@ -570,9 +591,9 @@ export default function App() {
   const hazardAlongs = useMemo(
     () =>
       navTrack
-        ? hazards.map((h) => projectAlong(navTrack.coords, navTrack.cum, h.lat, h.lng))
+        ? proxHazards.map((h) => projectAlong(navTrack.coords, navTrack.cum, h.lat, h.lng))
         : [],
-    [hazards, navTrack]
+    [proxHazards, navTrack]
   );
 
   // Proximity alert: warn BEFORE the traveller reaches a hazard, measured ALONG the route —
@@ -580,15 +601,17 @@ export default function App() {
   // order you'll meet them. Checked on every position update (each animation frame during the
   // simulated drive), so no hazard is skipped even when the demo is sped up.
   useEffect(() => {
-    if (phase !== "active" || !position || !hazards.length) return;
+    if (phase !== "active" || !position || !proxHazards.length) return;
     const speed = simSpeedRef.current > 1 ? simSpeedRef.current : 8;
     const fast = simSpeedRef.current > 12;
     const lead = Math.max(350, speed * 4); // warn this far ahead; scales with the sim pace
     const along = navTrack
       ? projectAlong(navTrack.coords, navTrack.cum, position.lat, position.lng)
       : 0;
-    hazards.forEach((h, i) => {
+    proxHazards.forEach((h, i) => {
       const key = `${h.type}:${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`;
+      // A web advisory of unknown category reads better as "Advisory" than "Other".
+      const label = h._web && h.type === "other" ? "Advisory" : hazardLabel(h.type);
       // Distance to the hazard along the route (>0 still ahead). Fall back to crow-flies only
       // when we have no track to project onto.
       const ahead = navTrack
@@ -598,9 +621,9 @@ export default function App() {
       if (inWindow && !warnedProx.current.has(key)) {
         warnedProx.current.add(key);
         pushToast(
-          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} · ${Math.round(Math.max(0, ahead))} m ahead`,
+          `${HAZARD_ICON[h.type] || "🌐"} ${label}${h.locality ? ` · ${h.locality}` : ""} · ${Math.round(Math.max(0, ahead))} m ahead`,
           h.description || "Approaching a hazard — slow down and stay alert.",
-          "#ff8a3d"
+          h._web ? "#c9a227" : "#ff8a3d"
         );
       }
       // Voice it too — including during a compressed sim. A hazard warning outranks a turn
@@ -609,10 +632,13 @@ export default function App() {
       if (voiceOn && inWindow && !spokenProx.current.has(key)) {
         spokenProx.current.add(key);
         const m = Math.round(Math.max(0, ahead) / 10) * 10;
-        speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${m} meters ahead. Slow down.`, { replace: fast });
+        const spoken = h._web
+          ? `Heads up. ${label} reported${h.locality ? ` in ${h.locality}` : ""}, about ${m} meters ahead.`
+          : `Caution, ${label.toLowerCase()} about ${m} meters ahead. Slow down.`;
+        speakNav(spoken, { replace: fast });
       }
     });
-  }, [position, hazards, hazardAlongs, navTrack, phase, voiceOn]);
+  }, [position, proxHazards, hazardAlongs, navTrack, phase, voiceOn]);
 
   // Turn-by-turn: trigger off distance ALONG the polyline. Live GPS speaks ahead +
   // at the turn (queued). A compressed Simulate Drive speaks ONE line at the
@@ -1004,8 +1030,9 @@ export default function App() {
 
   function pushToast(title, msg, color) {
     const id = Math.random().toString(36).slice(2);
-    // Keep at most 2 on screen — a new toast drops the oldest so they don't stack up.
-    setToasts((t) => [...t, { id, title, msg, color }].slice(-2));
+    // Keep the most recent few — enough that a burst of hazards near one spot doesn't silently
+    // drop the ones you most need to see, but not so many they bury the map.
+    setToasts((t) => [...t, { id, title, msg, color }].slice(-4));
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 7000);
   }
 
