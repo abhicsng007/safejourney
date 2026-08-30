@@ -484,4 +484,6 @@ def agent_chat(req: ChatReq) -> dict:
         # ADK/Gemini not configured — return a clear, non-fatal message.
         return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}
     except Exception as e:  # pragma: no cover - keep the endpoint resilient for demos
+        import traceback
+        print("[agent_chat] error:", traceback.format_exc(), flush=True)
         return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}

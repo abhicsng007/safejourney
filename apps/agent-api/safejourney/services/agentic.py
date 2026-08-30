@@ -46,18 +46,29 @@ def _get_session_service():
 def _summarize_tool_result(response) -> str:
     """Compress a tool's raw response into one human line for the trace panel."""
     if isinstance(response, dict):
-        if "routes" in response:
-            n = len(response.get("routes") or [])
+        # check_trip_now / evaluate_trip returns "hazards" as an int COUNT (+ safety_score),
+        # while scan_route_hazards returns it as a LIST — handle both, and never assume shape.
+        if "safety_score" in response and not isinstance(response.get("hazards"), list):
+            n = response.get("hazards")
+            score = response.get("safety_score")
+            return f"road ahead: {n if n is not None else '?'} hazard(s), safety score {score}."
+        if "routes" in response and isinstance(response.get("routes"), list):
+            n = len(response["routes"])
             rec = response.get("recommended_route_id")
             return f"{n} route(s) scored; recommended {rec}."
-        if "hazards" in response:
-            hz = response.get("hazards") or []
+        if isinstance(response.get("hazards"), list):
+            hz = response["hazards"]
             kinds = sorted({h.get("type") for h in hz if isinstance(h, dict)})
             return f"{len(hz)} hazard(s): {', '.join(kinds) or 'none'}."
-        if "harbors" in response:
-            return f"{len(response.get('harbors') or [])} safe harbour(s) nearby."
-        if "precautions" in response:
-            return f"{len(response.get('precautions') or [])} precaution(s)."
+        if isinstance(response.get("places"), list):
+            pls = response["places"]
+            q = response.get("query", "places")
+            near = f" (nearest {round(pls[0]['distance_m'])} m)" if pls and pls[0].get("distance_m") is not None else ""
+            return f"{len(pls)} nearby {q}{near}."
+        if isinstance(response.get("harbors"), list):
+            return f"{len(response['harbors'])} safe harbour(s) nearby."
+        if isinstance(response.get("precautions"), list):
+            return f"{len(response['precautions'])} precaution(s)."
         keys = ", ".join(list(response.keys())[:4])
         return f"returned {{{keys}}}"
     text = str(response)
