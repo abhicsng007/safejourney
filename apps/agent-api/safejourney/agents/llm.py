@@ -39,9 +39,9 @@ def generate(prompt: str, system: str = "", max_tokens: int = 200) -> Optional[s
 
         cfg = types.GenerateContentConfig(
             system_instruction=system or None,
-            max_output_tokens=max_tokens,
+            max_output_tokens=_max_out(s.gemini_model, max_tokens),
             temperature=0.4,
-            **_thinking_off(types),
+            **_thinking_off(types, s.gemini_model),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         return (resp.text or "").strip() or None
@@ -80,10 +80,10 @@ def generate_json(prompt: str, system: str = "", max_tokens: int = 512) -> Optio
 
         cfg = types.GenerateContentConfig(
             system_instruction=system or None,
-            max_output_tokens=max_tokens,
+            max_output_tokens=_max_out(s.gemini_model, max_tokens),
             temperature=0.2,
             response_mime_type="application/json",
-            **_thinking_off(types),
+            **_thinking_off(types, s.gemini_model),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         raw = (resp.text or "").strip()
@@ -95,19 +95,32 @@ def generate_json(prompt: str, system: str = "", max_tokens: int = 512) -> Optio
         return None
 
 
-def _thinking_off(types) -> dict:
-    """thinking_config that disables model 'thinking' when the SDK/model supports it.
+def _thinking_off(types, model: str = "") -> dict:
+    """thinking_config that keeps 'thinking' from eating the answer, per model family.
 
-    gemini-2.5-* are thinking models: with a small max_output_tokens the internal thinking
-    tokens consume the whole budget and the actual answer (our JSON) comes back truncated or
-    empty. For these extraction tasks we don't need thinking, so cap it to 0 where available.
-    Returned as kwargs so it's simply omitted on SDKs/models that don't support it."""
-    if hasattr(types, "ThinkingConfig"):
+    gemini-2.5-* / 1.5-* accept thinking_budget=0 to disable thinking outright (with a small
+    max_output_tokens the thinking tokens otherwise consume the whole budget and the answer
+    comes back empty). gemini-3.x REJECT budget=0 ("invalid argument") — they always think —
+    so there we leave thinking on and instead give the call output headroom (see _max_out)."""
+    m = model or ""
+    if not hasattr(types, "ThinkingConfig"):
+        return {}
+    if m.startswith("gemini-2.5") or m.startswith("gemini-1.5"):
         try:
             return {"thinking_config": types.ThinkingConfig(thinking_budget=0)}
         except Exception:
             return {}
-    return {}
+    return {}  # 3.x and unknown models: don't cap (budget=0 is invalid on 3.x)
+
+
+def _max_out(model: str, requested: int) -> int:
+    """Output-token budget. 3.x always thinks, and thinking shares the output budget — a tiny
+    cap (e.g. 90 for a one-line narration) leaves no room for the actual reply, so give thinking
+    models a floor. 2.5-* have thinking disabled above, so their small caps are fine."""
+    m = model or ""
+    if m.startswith("gemini-2.5") or m.startswith("gemini-1.5"):
+        return requested
+    return max(requested, 1024)
 
 
 def generate_with_search(prompt: str, system: str = "", max_tokens: int = 2048) -> Optional[str]:
@@ -124,9 +137,9 @@ def generate_with_search(prompt: str, system: str = "", max_tokens: int = 2048) 
         cfg = types.GenerateContentConfig(
             system_instruction=system or None,
             tools=[search_tool],
-            max_output_tokens=max_tokens,
+            max_output_tokens=_max_out(s.gemini_model, max_tokens),
             temperature=0.2,
-            **_thinking_off(types),
+            **_thinking_off(types, s.gemini_model),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
         return (resp.text or "").strip() or None

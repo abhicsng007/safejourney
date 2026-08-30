@@ -25,9 +25,12 @@ class Settings:
     # Use Vertex AI if a project is set; otherwise the Gemini API key path.
     use_vertex: bool = _b("GOOGLE_GENAI_USE_VERTEXAI", bool(os.getenv("GCP_PROJECT")))
     gemini_api_key: str = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    # (Override GEMINI_MODEL only with a model your GCP project can access in its region and
-    #  that supports Search grounding — an unavailable id makes grounded calls 404.)
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    # SafeJourney runs on Gemini 3.x. NOTE: for this project the Gemini 3.x models are served
+    # only by the **Gemini Developer API (AI Studio)**, not as Vertex publisher models — so set
+    # GOOGLE_GENAI_USE_VERTEXAI=false and GOOGLE_API_KEY=<AI Studio key> for the 3.x path.
+    # (Override GEMINI_MODEL only with a model this key can access; an unavailable id 404s and a
+    #  Vertex-only path 404s on 3.x. gemini-3.7-flash is newest but currently returns 503.)
     # Gemma — a small, cheap open model used for the high-volume crowd-report triage (turning
     # free-text/voice hazard reports into the structured hazard schema). Gemini stays reserved
     # for low-volume, high-stakes reasoning; Gemma absorbs the classification firehose.
