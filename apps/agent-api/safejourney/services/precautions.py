@@ -39,6 +39,16 @@ PRECAUTIONS: dict[HazardType, list[str]] = {
         "Take shaded breaks; watch for dizziness or cramps (early heatstroke).",
         "Prefer covered or air-conditioned transit if available.",
     ],
+    HazardType.FOG: [
+        "Low visibility — use low-beam/fog lights and cut speed sharply.",
+        "Increase following distance; brake early and avoid overtaking.",
+        "Use the road edge/lane markings as a guide; pull over safely if it thickens.",
+    ],
+    HazardType.AIR_QUALITY: [
+        "Unhealthy air on this route — wear an N95 mask, especially on two-wheelers/on foot.",
+        "Keep car windows up and set AC to recirculate.",
+        "Shorten exposure if you have a respiratory or heart condition.",
+    ],
     HazardType.LANDSLIDE: [
         "Do not stop under steep or freshly-cut slopes.",
         "Watch for fallen rocks, cracks or mud on the road and turn back if unsure.",

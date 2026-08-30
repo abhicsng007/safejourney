@@ -17,6 +17,8 @@ class HazardType(str, Enum):
     LIGHTNING = "lightning"         # active cell, open-ground exposure
     STORM = "storm"                 # heavy rain / high wind / cyclone
     HEAT = "heat"                   # extreme-heat window
+    FOG = "fog"                     # low visibility (fog / mist / haze)
+    AIR_QUALITY = "air_quality"     # unhealthy air (high AQI / PM2.5)
     LANDSLIDE = "landslide"         # slope failure, rockfall
     GLOF = "glof"                   # glacier-lake outburst / upstream blockage cascade
 
@@ -64,6 +66,8 @@ HAZARD_WEIGHTS: dict[HazardType, float] = {
     HazardType.LIGHTNING: 1.5,
     HazardType.STORM: 1.0,
     HazardType.HEAT: 0.9,
+    HazardType.FOG: 1.2,
+    HazardType.AIR_QUALITY: 0.7,
     HazardType.LANDSLIDE: 1.6,
     HazardType.GLOF: 2.0,
     HazardType.ROADWORK: 0.7,

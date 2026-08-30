@@ -76,16 +76,53 @@ def plan_and_score(
     recommended = ranked[0] if ranked else None
     all_blocking = bool(ranked) and all(r.blocking for r in ranked)
 
+    # Pre-trip environmental briefing (weather / visibility / air quality). Fold the fog +
+    # unhealthy-air hazards it finds into the recommended route so they score, show on the map,
+    # and warn during the drive like any other hazard — and keep the summary for the UI card.
+    conditions = _unavailable_conditions()
+    if recommended is not None:
+        conditions = _apply_conditions(recommended, mode, risk_tolerance)
+
     result = {
         "routes": [r.to_dict() for r in ranked],
         "recommended_route_id": recommended.route_id if recommended else None,
         "all_routes_blocked": all_blocking,
         "advice": _plan_advice(ranked, all_blocking),
+        "conditions": conditions,
         "precautions": precautions_for(
             [h.type for h in (recommended.hazards if recommended else [])]
         ),
     }
     return result
+
+
+def _unavailable_conditions() -> dict:
+    return {"weather": None, "visibility": None, "aqi": None, "source": "unavailable"}
+
+
+def _apply_conditions(route: ScoredRoute, mode: str, risk_tolerance: float) -> dict:
+    """Fetch conditions for a scored route, merge the implied hazards in, and re-score it.
+    Returns the summary dict for the UI (empty/unavailable when offline)."""
+    from safejourney_shared.geo import distance_along_polyline_m
+    from ..tools.conditions import route_conditions
+
+    pts = route.meta.get("points") or []
+    if not pts:
+        return _unavailable_conditions()
+    summary, cond_hz = route_conditions(pts)
+    if cond_hz:
+        existing = {h.key() for h in route.hazards}
+        for h in cond_hz:
+            if h.key() in existing:
+                continue
+            h.offset_m = 0.0  # sampled on the route line itself
+            if h.distance_along_m is None:
+                h.distance_along_m = distance_along_polyline_m(h.lat, h.lng, pts)
+            route.hazards.append(h)
+        route.score = safety_score(route.hazards, mode=mode, risk_tolerance=risk_tolerance)
+        route.blocking = route_is_blocking(route.hazards)
+        route.summary = _summary(route.hazards, classify_score(route.score))
+    return summary
 
 
 def first_mile_leg(

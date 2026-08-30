@@ -1,5 +1,7 @@
 """Tests for the Phase D hazard detectors: sharp turns, blackspots, unlit, mobility."""
 
+import pytest
+
 from safejourney_shared.hazards import HazardType, Severity
 
 from safejourney.tools.geometry_hazards import sharp_turn_hazards
@@ -207,6 +209,32 @@ def test_step_html_stripping_and_feature_tag():
     assert steps[0]["instruction"] == "Turn right onto MG Road"
     assert steps[0]["feature"] is None
     assert steps[1]["feature"] == "footbridge" and steps[1]["icon"] == "🌉"
+
+
+def test_fallback_routes_include_narratable_steps():
+    from safejourney.tools.route import _fallback_routes, _steps_from_points
+
+    origin, dest = (12.9757, 77.605), (12.9698, 77.75)
+    routes = _fallback_routes(origin, dest)
+    assert len(routes) >= 2
+    for r in routes:
+        steps = r.get("steps") or []
+        assert steps, "fallback routes must have turn-by-turn steps for voice nav"
+        assert steps[0]["start"]["lat"] == pytest.approx(origin[0], abs=1e-5)
+        assert steps[0]["start"]["lng"] == pytest.approx(origin[1], abs=1e-5)
+        assert steps[0]["instruction"].lower().startswith("head")
+        assert steps[-1]["end"]["lat"] == pytest.approx(dest[0], abs=1e-4)
+        assert all(s.get("start") and s["start"].get("lat") is not None for s in steps)
+
+    # A long fallback must not be a single silent leg — continue-cues split it.
+    bypass = next(r for r in routes if r["route_id"] != "direct")
+    assert len(bypass["steps"]) >= 2
+    assert sum(s["distance_m"] for s in bypass["steps"]) > 10_000
+
+    # Degenerate 2-point line still produces a single departure step.
+    short = _steps_from_points([origin, dest])
+    assert len(short) == 1
+    assert "Head" in short[0]["instruction"]
 
 
 # ---- GDACS regional snap (#4 fix) ----

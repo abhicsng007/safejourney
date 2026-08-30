@@ -43,7 +43,7 @@ _BASE_KIT: dict[str, list[tuple[str, str]]] = {
 }
 
 
-def _checklist(mode: str, htypes: set[str]) -> list[dict]:
+def _checklist(mode: str, htypes: set[str], conditions: Optional[dict] = None) -> list[dict]:
     items = list(_BASE_KIT.get(mode, _BASE_KIT["two_wheeler"]))
 
     wet = htypes & _WET
@@ -66,7 +66,44 @@ def _checklist(mode: str, htypes: set[str]) -> list[dict]:
     if htypes & {"pothole", "roadwork", "accident"}:
         items.append(("Allow extra time", "Broken road / works / an incident ahead — don't rush."))
 
+    # Fog / low visibility (hazard-level: visibility under ~2.5 km on the route).
+    if "fog" in htypes:
+        if mode in _EXPOSED_MODES:
+            items.append(("Fog light on + anti-fog visor, hi-vis layer", "Low visibility ahead — be seen and slow right down."))
+        else:
+            items.append(("Fog lights + demist ready", "Low visibility ahead — keep lights on, extra following distance."))
+    # Unhealthy air (hazard-level: US AQI >= 151 on the route).
+    if "air_quality" in htypes:
+        items.append(("N95 mask" + (" (windows up, recirculate)" if mode == "car" else ""),
+                      "Unhealthy air on your route — protect your lungs, especially outdoors."))
+
+    items += _condition_items(mode, conditions, htypes)
     return [{"item": t, "reason": r, "done": False} for t, r in items]
+
+
+def _condition_items(mode: str, conditions: Optional[dict], htypes: set[str]) -> list[tuple[str, str]]:
+    """Reminders from the live conditions summary for readings that matter but haven't crossed
+    the hazard threshold (moderate haze, sensitive-group AQI, gusty-but-not-storm wind).
+    Skips anything already covered by a hazard-level item above."""
+    out: list[tuple[str, str]] = []
+    if not conditions:
+        return out
+    vis = conditions.get("visibility")
+    aqi = conditions.get("aqi")
+    weather = conditions.get("weather")
+
+    if vis and vis.get("level") == "moderate" and "fog" not in htypes:
+        out.append(("Headlight on, extra following distance",
+                    f"Visibility ~{vis.get('km')} km — hazy; keep lights on and speed down."))
+    if aqi and "air_quality" not in htypes and (aqi.get("us_aqi") or 0) >= 101:
+        # 101–150: unhealthy for sensitive groups (below the mask-everyone threshold).
+        out.append(("Mask if sensitive (N95)",
+                    f"AQI {aqi.get('us_aqi')} — unhealthy for sensitive groups; mask up if you have asthma/heart issues."))
+    if (weather and weather.get("gusty") and "storm" not in htypes
+            and mode in _EXPOSED_MODES):
+        out.append(("Brace for crosswinds",
+                    f"Gusts ~{weather.get('wind_kmh')} km/h — grip firmly and watch for loose debris."))
+    return out
 
 
 def _verdict(rating: str, all_blocked: bool, htypes: set[str], mode: str) -> tuple[str, str]:
@@ -80,6 +117,22 @@ def _verdict(rating: str, all_blocked: bool, htypes: set[str], mode: str) -> tup
     if rating == "caution":
         return ("caution", "Mostly fine with a few things to watch. Grab the kit below and head out.")
     return ("go", "Looks clear to travel. Quick kit check and you're good to go.")
+
+
+def _apply_conditions_verdict(
+    verdict: str, headline: str, conditions: Optional[dict], htypes: set[str], mode: str
+) -> tuple[str, str]:
+    """Nudge a 'go' up to 'caution' when the environment warrants it but no hazard fired —
+    sensitive-group air (AQI 101–150) or hazy visibility. Never downgrades a 'wait'/'caution'."""
+    if verdict != "go" or not conditions:
+        return verdict, headline
+    aqi = conditions.get("aqi") or {}
+    vis = conditions.get("visibility") or {}
+    if (aqi.get("us_aqi") or 0) >= 101:
+        return ("caution", f"Air quality is poor (AQI {aqi.get('us_aqi')}) — you can go, but mask up if you're sensitive.")
+    if vis.get("level") == "moderate" and mode in _EXPOSED_MODES:
+        return ("caution", f"Visibility is down to ~{vis.get('km')} km — go with lights on and take it slow.")
+    return verdict, headline
 
 
 def readiness(plan: dict, mode: str) -> dict:
@@ -102,9 +155,11 @@ def readiness(plan: dict, mode: str) -> dict:
         htypes |= {h.get("type") for h in (first_leg.get("hazards") or [])}
     htypes.discard(None)
 
+    conditions = plan.get("conditions")
     rating = rec.get("rating") if rec else "safe"
     verdict, headline = _verdict(rating, bool(plan.get("all_routes_blocked")), htypes, mode)
-    checklist = _checklist(mode, htypes)
+    verdict, headline = _apply_conditions_verdict(verdict, headline, conditions, htypes, mode)
+    checklist = _checklist(mode, htypes, conditions)
 
     result = {
         "verdict": verdict,

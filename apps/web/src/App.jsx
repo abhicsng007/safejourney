@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import MapView from "./components/MapView.jsx";
 import { api } from "./api.js";
 import { enablePush, fcmConfigured } from "./lib/fcm.js";
 import { decodePolyline } from "./lib/polyline.js";
-import { speak, speakNav, primeSpeech, cancelSpeech, speechSupported } from "./lib/speech.js";
+import { speak, speakNav, primeSpeech, cancelSpeech, clearNavQueue, setSpeechRate, speechSupported } from "./lib/speech.js";
 import {
   RATING_COLOR,
   ACTION_META,
@@ -115,6 +115,19 @@ function pointAtFraction(coords, f) {
   const i = Math.min(coords.length - 1, Math.max(0, Math.round((coords.length - 1) * f)));
   return { lng: coords[i][0], lat: coords[i][1] };
 }
+// Stable identity for a hazard so the two sources (plan-time route scan + live snapshot)
+// don't double-count the same one. Mirrors the backend's Hazard.key().
+function hazardKey(h) {
+  return `${h.type}:${(h.lat ?? 0).toFixed(3)}:${(h.lng ?? 0).toFixed(3)}`;
+}
+// Union two hazard lists, deduped by key. The live snapshot wins on conflicts (freshest
+// severity), but route hazards it no longer reports (already passed, or scan flapped) survive.
+function mergeHazards(routeHz, liveHz) {
+  const by = new Map();
+  for (const h of routeHz || []) by.set(hazardKey(h), h);
+  for (const h of liveHz || []) by.set(hazardKey(h), h);
+  return [...by.values()];
+}
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, toR = Math.PI / 180;
   const dphi = (lat2 - lat1) * toR, dl = (lng2 - lng1) * toR;
@@ -142,6 +155,116 @@ function fmtStepDist(m) {
   if (!m) return "";
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
 }
+const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+function bearingDeg(lat1, lng1, lat2, lng2) {
+  const p1 = (lat1 * Math.PI) / 180, p2 = (lat2 * Math.PI) / 180;
+  const dl = ((lng2 - lng1) * Math.PI) / 180;
+  const east = Math.sin(dl) * Math.cos(p2);
+  const north = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(east, north) * 180 / Math.PI + 360) % 360;
+}
+function turnPhrase(delta) {
+  const mag = Math.abs(delta);
+  if (mag < 18) return null;
+  const side = delta > 0 ? "right" : "left";
+  if (mag < 45) return `Bear ${side}`;
+  if (mag < 110) return `Turn ${side}`;
+  if (mag < 160) return `Make a sharp ${side} turn`;
+  return "Make a U-turn";
+}
+function pathLenM(pts, i0, i1) {
+  let d = 0;
+  for (let i = i0; i < i1; i++) d += haversineM(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng);
+  return d;
+}
+/** Google-style steps from a MapLibre polyline [[lng,lat], ...] when Directions didn't return any. */
+function stepsFromCoords(coords) {
+  if (!coords || coords.length < 2) return [];
+  const pts = coords.map((c) => ({ lat: c[1], lng: c[0] }));
+  let stepB = bearingDeg(pts[0].lat, pts[0].lng, pts[1].lat, pts[1].lng);
+  let pending = `Head ${COMPASS[Math.floor((stepB + 22.5) / 45) % 8]} toward your destination`;
+  let lastI = 0;
+  let travelled = 0;
+  const continueEvery = 2000;
+  const steps = [];
+  const mk = (instruction, start, end, distance_m) => ({
+    instruction,
+    distance_m: Math.round(distance_m),
+    duration_s: Math.round(distance_m / 8.3),
+    start: { lat: start.lat, lng: start.lng },
+    end: { lat: end.lat, lng: end.lng },
+  });
+  for (let i = 1; i < pts.length - 1; i++) {
+    const b = bearingDeg(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng);
+    const phrase = turnPhrase(((b - stepB + 540) % 360) - 180);
+    travelled += haversineM(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+    const incoming = pathLenM(pts, lastI, i);
+    const isTurn = Boolean(phrase) && incoming >= 40;
+    const isCont = travelled >= continueEvery && incoming >= continueEvery * 0.75;
+    if (!isTurn && !isCont) continue;
+    steps.push(mk(pending, pts[lastI], pts[i], incoming));
+    pending = isTurn ? phrase : "Continue toward your destination";
+    lastI = i;
+    travelled = 0;
+    stepB = b;
+  }
+  steps.push(mk(pending, pts[lastI], pts[pts.length - 1], pathLenM(pts, lastI, pts.length - 1)));
+  return steps;
+}
+function getNavSteps(selectedRoute, trip) {
+  const s = selectedRoute?.meta?.steps;
+  if (Array.isArray(s) && s.length && s[0]?.start) return s;
+  const enc = selectedRoute?.encoded_polyline || trip?.encoded_polyline;
+  if (!enc) return [];
+  return stepsFromCoords(decodePolyline(enc));
+}
+
+/** Cumulative metres along a MapLibre polyline [[lng,lat], ...]. */
+function polylineCum(coords) {
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) {
+    cum.push(cum[i - 1] + haversineM(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]));
+  }
+  return cum;
+}
+
+/** Distance along the polyline of the closest projection of (lat,lng). */
+function projectAlong(coords, cum, lat, lng) {
+  if (!coords || coords.length < 2) return 0;
+  let bestD = Infinity, bestAlong = 0;
+  const cos = Math.cos((lat * Math.PI) / 180);
+  for (let i = 1; i < coords.length; i++) {
+    const lat1 = coords[i - 1][1], lng1 = coords[i - 1][0];
+    const lat2 = coords[i][1], lng2 = coords[i][0];
+    const vx = (lng2 - lng1) * cos * 111320;
+    const vy = (lat2 - lat1) * 110540;
+    const wx = (lng - lng1) * cos * 111320;
+    const wy = (lat - lat1) * 110540;
+    const len2 = vx * vx + vy * vy || 1;
+    const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / len2));
+    const plng = lng1 + t * (lng2 - lng1);
+    const plat = lat1 + t * (lat2 - lat1);
+    const d = haversineM(lat, lng, plat, plng);
+    if (d < bestD) {
+      bestD = d;
+      bestAlong = cum[i - 1] + t * ((cum[i] - cum[i - 1]) || 0);
+    }
+  }
+  return bestAlong;
+}
+
+function buildNavTrack(encoded, steps) {
+  const coords = decodePolyline(encoded || "");
+  if (coords.length < 2) return null;
+  const cum = polylineCum(coords);
+  const alongs = (steps || []).map((s) =>
+    s?.start?.lat != null ? projectAlong(coords, cum, s.start.lat, s.start.lng) : 0
+  );
+  for (let i = 1; i < alongs.length; i++) {
+    if (alongs[i] < alongs[i - 1]) alongs[i] = alongs[i - 1] + 1;
+  }
+  return { coords, cum, alongs, total: cum[cum.length - 1] || 1 };
+}
 
 export default function App() {
   const [phase, setPhase] = useState("plan"); // plan | routes | active
@@ -155,6 +278,7 @@ export default function App() {
 
   const [plan, setPlan] = useState(null);
   const [prep, setPrep] = useState(null);
+  const [conditions, setConditions] = useState(null); // weather/visibility/AQI briefing
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [trip, setTrip] = useState(null);
   const [gpsOn, setGpsOn] = useState(false);
@@ -183,8 +307,14 @@ export default function App() {
   const warnedProx = useRef(new Set());
   const navIdx = useRef(0);          // next route step to narrate
   const navPre = useRef(new Set());  // step indices already pre-announced ("in 200 m…")
+  const navAt = useRef(new Set());   // step indices already announced at the junction
   const spokenProx = useRef(new Set()); // hazards whose proximity warning was actually voiced
+  const routeHazards = useRef([]);   // hazards known for the CHOSEN route (from planning) — the
+                                     // ground truth the live map/warnings use, so a lagging
+                                     // remaining-corridor rescan can't make them vanish mid-drive.
   const arrivedSpoken = useRef(false);
+  const simSpeedRef = useRef(0);     // m/s during Simulate Drive; 0 otherwise
+  const [navCue, setNavCue] = useState(null);
 
   // health check
   useEffect(() => {
@@ -286,6 +416,7 @@ export default function App() {
       setTrip(res.trip);
       setPlan(res.plan);
       setPrep(res.prep);
+      setConditions(res.plan.conditions || null);
       setSelectedRouteId(res.plan.recommended_route_id);
       setHazards(selectedHazards(res.plan, res.plan.recommended_route_id));
       setPhase("prep");
@@ -348,10 +479,19 @@ export default function App() {
       setPosition(t.origin);
       setAlerts([]);
       setHarbors([]);
+      // Seed the live view with the hazards already found for THIS route at plan time, so
+      // the map shows them and warnings can fire from the very first metre — instead of a
+      // blank map until the first backend snapshot lands (and only for the road ahead).
+      routeHazards.current = selectedRoute.hazards || [];
+      setHazards(routeHazards.current);
       seenAlerts.current = new Set();
+      warnedProx.current = new Set();
+      spokenProx.current = new Set();
       navIdx.current = 0;
       navPre.current = new Set();
+      navAt.current = new Set();
       arrivedSpoken.current = false;
+      setNavCue(null);
       setPhase("active");
       setFitKey((k) => k + 1);
       refresh(t.id, true);
@@ -386,81 +526,163 @@ export default function App() {
     };
   }, [phase, trip]);
 
-  // Proximity alert: warn ~350 m BEFORE the traveller reaches a known hazard, so the notice
-  // lands ahead of the point, not after crossing it. Checked on every position update (each
-  // animation frame during the simulated drive), so no hazard is skipped.
+  const navSteps = useMemo(
+    () => getNavSteps(selectedRoute, trip),
+    [selectedRoute, trip]
+  );
+  const navTrack = useMemo(
+    () => buildNavTrack(trip?.encoded_polyline || selectedRoute?.encoded_polyline, navSteps),
+    [trip?.encoded_polyline, selectedRoute?.encoded_polyline, navSteps]
+  );
+
+  // Each hazard's distance ALONG the route (metres from origin), projected onto the same
+  // polyline the traveller drives. Computed once per hazard/route change — not per frame —
+  // and never derived from the hazard's own distance_along_m (a snapshot measures that from
+  // the current position, not the origin, so it wouldn't line up with our position-along).
+  const hazardAlongs = useMemo(
+    () =>
+      navTrack
+        ? hazards.map((h) => projectAlong(navTrack.coords, navTrack.cum, h.lat, h.lng))
+        : [],
+    [hazards, navTrack]
+  );
+
+  // Proximity alert: warn BEFORE the traveller reaches a hazard, measured ALONG the route —
+  // not crow-flies — so the notice tracks where you actually are on the path and fires in the
+  // order you'll meet them. Checked on every position update (each animation frame during the
+  // simulated drive), so no hazard is skipped even when the demo is sped up.
   useEffect(() => {
     if (phase !== "active" || !position || !hazards.length) return;
-    for (const h of hazards) {
+    const speed = simSpeedRef.current > 1 ? simSpeedRef.current : 8;
+    const fast = simSpeedRef.current > 12;
+    const lead = Math.max(350, speed * 4); // warn this far ahead; scales with the sim pace
+    const along = navTrack
+      ? projectAlong(navTrack.coords, navTrack.cum, position.lat, position.lng)
+      : 0;
+    hazards.forEach((h, i) => {
       const key = `${h.type}:${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`;
-      const d = haversineM(position.lat, position.lng, h.lat, h.lng);
-      if (d <= 350 && !warnedProx.current.has(key)) {
+      // Distance to the hazard along the route (>0 still ahead). Fall back to crow-flies only
+      // when we have no track to project onto.
+      const ahead = navTrack
+        ? hazardAlongs[i] - along
+        : haversineM(position.lat, position.lng, h.lat, h.lng);
+      const inWindow = ahead <= lead && ahead >= -40; // approaching, not already well past
+      if (inWindow && !warnedProx.current.has(key)) {
         warnedProx.current.add(key);
         pushToast(
-          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} · ${Math.round(d)} m ahead`,
+          `${HAZARD_ICON[h.type] || "❗"} ${hazardLabel(h.type)} · ${Math.round(Math.max(0, ahead))} m ahead`,
           h.description || "Approaching a hazard — slow down and stay alert.",
           "#ff8a3d"
         );
       }
-      // Voice the warning independently of the toast, and retry until it actually speaks
-      // (speakNav yields when something else is talking) — so it isn't lost mid-sim.
-      if (voiceOn && d <= 350 && !spokenProx.current.has(key)) {
-        if (speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${Math.round(d / 10) * 10} meters ahead. Slow down.`)) {
-          spokenProx.current.add(key);
-        }
-      } else if (d > 550) {
-        warnedProx.current.delete(key); // re-arm once well past, so a loop back re-warns
-        spokenProx.current.delete(key);
+      // Voice it too — including during a compressed sim. A hazard warning outranks a turn
+      // cue, so on a sped-up run it replaces the current line instead of queueing behind it
+      // (queueing is what used to make guidance lag the car); each hazard still speaks once.
+      if (voiceOn && inWindow && !spokenProx.current.has(key)) {
+        spokenProx.current.add(key);
+        const m = Math.round(Math.max(0, ahead) / 10) * 10;
+        speakNav(`Caution, ${hazardLabel(h.type).toLowerCase()} about ${m} meters ahead. Slow down.`, { replace: fast });
       }
-    }
-  }, [position, hazards, phase]);
+    });
+  }, [position, hazards, hazardAlongs, navTrack, phase, voiceOn]);
 
-  // Turn-by-turn voice guidance: as the traveller approaches each route step, narrate the
-  // maneuver ("in 200 meters, turn left onto MG Road") like a nav app. Lower priority than a
-  // safety alert (speakNav yields to it). Uses the selected route's steps.
+  // Turn-by-turn: trigger off distance ALONG the polyline. Live GPS speaks ahead +
+  // at the turn (queued). A compressed Simulate Drive speaks ONE line at the
+  // maneuver, replacing any previous cue — so the voice stays on the junction
+  // you're at, instead of lagging through a backlog.
   useEffect(() => {
-    if (phase !== "active" || !voiceOn || !position) return;
-    const steps = selectedRoute?.meta?.steps || [];
-    if (!steps.length) return;
+    if (phase !== "active" || !position) {
+      setNavCue(null);
+      return;
+    }
+    const steps = navSteps;
+    if (!steps.length) {
+      setNavCue(null);
+      return;
+    }
+    const speed = simSpeedRef.current > 1 ? simSpeedRef.current : 8;
+    const fast = simSpeedRef.current > 12; // demo is sped up past ~45 km/h
+    const preM = Math.max(250, speed * 8);
+    const atM = Math.max(50, speed * 2);
+    const along = navTrack
+      ? projectAlong(navTrack.coords, navTrack.cum, position.lat, position.lng)
+      : 0;
+
     let i = navIdx.current;
     while (i < steps.length) {
       const s = steps[i];
       if (!s?.start || s.start.lat == null) { i++; continue; }
-      const d = haversineM(position.lat, position.lng, s.start.lat, s.start.lng);
-      if (d < 35) {
-        if (navPre.current.has(i)) { i++; continue; } // already announced — move on
-        // At the maneuver and not yet announced: speak it plainly. If speakNav yields (channel
-        // busy with a greeting/alert), DON'T advance — retry next tick so the turn isn't lost.
-        if (speakNav(navLine(s.instruction, 0))) { navPre.current.add(i); i++; continue; }
-        break;
-      }
-      if (d < 220 && !navPre.current.has(i)) {
-        // Only mark announced if it actually spoke; otherwise retry on the next position tick.
-        if (speakNav(navLine(s.instruction, d))) navPre.current.add(i);
-        break;
-      }
-      // Step is far (>220 m). If we've clearly passed it — the NEXT step's start is now closer
-      // — skip ahead so navigation keeps progressing (a turn missed while the channel was busy
-      // never freezes the guidance). Otherwise it's still ahead: wait.
-      const nxt = steps[i + 1];
-      if (nxt?.start && nxt.start.lat != null &&
-          haversineM(position.lat, position.lng, nxt.start.lat, nxt.start.lng) < d) {
+      const target = navTrack?.alongs[i] ?? 0;
+      const remain = target - along; // >0 still ahead, <=0 at/past the maneuver
+
+      if (remain <= atM) {
+        if (!navAt.current.has(i)) {
+          const overdue = remain < -atM;
+          // Fast sim: skip a cue we've already blown past (late speech is the lag).
+          // Otherwise speak the maneuver now, replacing any earlier line.
+          if (voiceOn && !(fast && overdue)) {
+            speakNav(navLine(s.instruction, 0), { replace: fast });
+          }
+          navAt.current.add(i);
+          navPre.current.add(i);
+        }
         i++;
+        if (fast) break; // let this line play; don't dump the next turn over it
         continue;
       }
-      break; // still upcoming but far — wait
+
+      if (!fast && remain <= preM && !navPre.current.has(i)) {
+        if (voiceOn) speakNav(navLine(s.instruction, remain));
+        navPre.current.add(i);
+      }
+      break; // this one is still ahead — wait
     }
     navIdx.current = i;
 
-    // Near the destination — announce arrival once.
+    // The CARD is derived from geometry, not the speak-pointer above (which advances the
+    // instant a maneuver is voiced, leaving the card a step ahead of the narration). Show the
+    // first maneuver not yet passed — so "Turn left now" on screen matches "Turn left" aloud.
+    let showI = -1;
+    for (let k = 0; k < steps.length; k++) {
+      const sk = steps[k];
+      if (!sk?.start || sk.start.lat == null) continue;
+      if ((navTrack?.alongs[k] ?? 0) - along > -atM) { showI = k; break; }
+    }
+    if (showI === -1) showI = steps.length - 1;
+    const cur = steps[showI];
+    if (cur) {
+      const remain = Math.max(0, (navTrack?.alongs[showI] ?? 0) - along);
+      let instr = (cur.instruction || "Continue ahead").trim();
+      instr = instr.split(/\s+Pass by\s+/i)[0].replace(/\s*\([^)]*\)/g, "").trim() || "Continue ahead";
+      const nextCue = {
+        instruction: instr,
+        distance_m: Math.round(remain / 10) * 10,
+        atTurn: remain <= atM,
+        index: showI,
+        total: steps.length,
+      };
+      setNavCue((prev) =>
+        prev &&
+        prev.instruction === nextCue.instruction &&
+        prev.distance_m === nextCue.distance_m &&
+        prev.atTurn === nextCue.atTurn &&
+        prev.index === nextCue.index
+          ? prev
+          : nextCue
+      );
+    }
+
     if (!arrivedSpoken.current) {
       const dest = trip?.destination;
-      if (dest && haversineM(position.lat, position.lng, dest.lat, dest.lng) < 60) {
+      const nearDest = dest && haversineM(position.lat, position.lng, dest.lat, dest.lng) < Math.max(60, atM);
+      const alongDone = navTrack && along >= (navTrack.total || 0) - Math.max(40, atM);
+      if (nearDest || alongDone) {
         arrivedSpoken.current = true;
-        speakNav("You have arrived at your destination. Stay safe.");
+        if (voiceOn) speakNav("You have arrived at your destination. Stay safe.", { replace: simSpeedRef.current > 12 });
+        setNavCue({ instruction: "You have arrived", distance_m: 0, atTurn: true, index: steps.length, total: steps.length });
       }
     }
-  }, [position, phase, voiceOn, selectedRoute, trip]);
+  }, [position, phase, voiceOn, navSteps, navTrack, trip]);
 
   // Real GPS: stream the device location to the backend so monitoring watches the road
   // actually ahead of the traveller. Falls back to the simulate buttons when off/denied.
@@ -499,7 +721,10 @@ export default function App() {
   async function refresh(tripId, silent = false) {
     try {
       const [hz, al] = await Promise.all([api.hazards(tripId), api.alerts(tripId)]);
-      setHazards(hz.hazards || []);
+      // The snapshot only covers the road STILL AHEAD (and can flap between scans). Union it
+      // with the route's known hazards so nothing already passed drops off the map, and any
+      // freshly-detected/injected hazard still shows. Dedup on type + rounded location.
+      setHazards(mergeHazards(routeHazards.current, hz.hazards || []));
       if (hz.safety_score != null) setSafetyScore(hz.safety_score);
       const list = al.alerts || [];
       setAlerts(list);
@@ -508,8 +733,9 @@ export default function App() {
           if (!seenAlerts.current.has(a.id)) {
             seenAlerts.current.add(a.id);
             pushToast(a.title, a.message, ACTION_META[a.action]?.color || "#25c7dc");
-            // Speak the alert aloud — the hands-free safety moment.
-            if (voiceOn) speak(`${a.title}. ${a.message}`);
+            // Speak the alert aloud — but not during Simulate Drive, where Cloud TTS
+            // and long alert lines are what push turn-by-turn behind the car.
+            if (voiceOn && !simRef.current) speak(`${a.title}. ${a.message}`);
           }
         }
       } else {
@@ -557,6 +783,8 @@ export default function App() {
   function stopSim() {
     if (simRef.current) cancelAnimationFrame(simRef.current);
     simRef.current = null;
+    simSpeedRef.current = 0;
+    setSpeechRate(1.05);
     setSimulating(false);
   }
   function simulateJourney() {
@@ -570,20 +798,44 @@ export default function App() {
       cum.push(cum[i - 1] + haversineM(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]));
     }
     const total = cum[cum.length - 1] || 1;
-    // Realistic pace: ~1 km per minute (~60 km/h), clamped so a tiny route still lasts long
-    // enough to see and a long one doesn't drag. This keeps hazard warnings well-timed.
-    const durationMs = Math.min(150000, Math.max(20000, (total / 1000) * 60000));
+    // Demo pace: ~1 km/min (~60 km/h), clamped so a short route still lasts and a long one
+    // doesn't drag. Announce windows scale with the resulting speed in the nav effect.
+    const durationMs = Math.min(150000, Math.max(45000, (total / 1000) * 60000));
     setSimulating(true);
     setGpsOn(false);              // simulated position overrides any live GPS
     warnedProx.current = new Set(); // re-arm proximity warnings for the run
-    navIdx.current = 0;             // restart turn-by-turn guidance from the first step
+    spokenProx.current = new Set(); // …and the spoken ones, so each hazard warns again
+    // Make sure the whole route's hazards are on the live map for the run, even if a prior
+    // refresh had trimmed them to the road ahead.
+    if (selectedRoute?.hazards?.length) {
+      routeHazards.current = selectedRoute.hazards;
+      setHazards((prev) => mergeHazards(selectedRoute.hazards, prev));
+    }
+    navIdx.current = 0;
     navPre.current = new Set();
+    navAt.current = new Set();
     arrivedSpoken.current = false;
-    if (voiceOn) speak("Starting navigation. I'll guide you turn by turn and warn you of hazards ahead.");
-    const start = performance.now();
+    clearNavQueue();
+    simSpeedRef.current = total / (durationMs / 1000);
+    setSpeechRate(1.3); // slightly snappier so a 1-min demo can keep up
+    const first = navSteps[0]?.instruction ? navLine(navSteps[0].instruction, 0) : "";
+    if (voiceOn) {
+      // Browser voice immediately — Cloud TTS is what made the car leave before
+      // the first instruction finished.
+      speakNav(first ? `Starting navigation. ${first}` : "Starting navigation.", { replace: true });
+      if (navSteps.length) {
+        navAt.current.add(0);
+        navPre.current.add(0);
+        navIdx.current = 1;
+      }
+    }
+    setPosition({ lat: coords[0][1], lng: coords[0][0] });
+    // Hold at origin so the first line lands before the car takes off.
+    const HOLD_MS = voiceOn ? 1500 : 0;
+    const start = performance.now() + HOLD_MS;
     let lastPush = 0;
     const step = (now) => {
-      const t = Math.min(1, (now - start) / durationMs);
+      const t = Math.min(1, Math.max(0, (now - start) / durationMs));
       const d = t * total;
       let i = 1;
       while (i < cum.length && cum[i] < d) i++;
@@ -600,6 +852,8 @@ export default function App() {
         simRef.current = requestAnimationFrame(step);
       } else {
         simRef.current = null;
+        simSpeedRef.current = 0;
+        setSpeechRate(1.05);
         setSimulating(false);
         api.setPosition(trip.id, pos.lat, pos.lng).catch(() => {});
         pushToast("Arrived", "Simulated journey complete — you reached the destination.", "#33d08c");
@@ -717,6 +971,7 @@ export default function App() {
     setMobility(null);
     setPosition(null);
     setSafetyScore(null);
+    setNavCue(null);
   }
 
   function pushToast(title, msg, color) {
@@ -826,6 +1081,8 @@ export default function App() {
               toggleGps={() => setGpsOn((v) => !v)}
               simulateJourney={simulateJourney}
               simulating={simulating}
+              navCue={navCue}
+              navSteps={navSteps}
             />
           )}
         </div>
@@ -841,6 +1098,7 @@ export default function App() {
         routes={phase === "routes" || phase === "prep" ? plan?.routes || [] : []}
         selectedRouteId={selectedRouteId}
         activePolyline={phase === "active" ? trip?.encoded_polyline : null}
+        conditions={phase !== "plan" ? conditions : null}
         hazards={hazards}
         harbors={harbors}
         essentials={essentials}
@@ -1310,10 +1568,10 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
         </>
       )}
 
-      {isWalk && steps.length > 0 && (
+      {steps.length > 0 && (
         <>
           <div className="divider" />
-          <span className="section-label">Walking directions</span>
+          <span className="section-label">{isWalk ? "Walking directions" : "Turn-by-turn"}</span>
           <ol className="directions">
             {steps.map((s, i) => (
               <li key={i}>
@@ -1614,7 +1872,7 @@ function NaturalReport({ onReport }) {
   );
 }
 
-function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, reportHazardText, resetDemo, mobility, gpsOn, toggleGps, simulateJourney, simulating }) {
+function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHarbor, findMobility, findEssentials, essentials, reportHazard, reportHazardText, resetDemo, mobility, gpsOn, toggleGps, simulateJourney, simulating, navCue, navSteps = [] }) {
   const rating =
     safetyScore == null ? null : safetyScore <= 2 ? "safe" : safetyScore <= 6 ? "caution" : safetyScore <= 14 ? "risky" : "dangerous";
   const color = rating ? RATING_COLOR[rating] : "#7d9490";
@@ -1645,6 +1903,35 @@ function ActivePanel({ trip, alerts, safetyScore, injectHazard, advance, findHar
         Watch a {MODES.find((m) => m.id === trip?.mode)?.label?.toLowerCase() || "traveller"} drive the whole
         route on the map while Guardian scans the road ahead and alerts on hazards — no real travel needed.
       </div>
+
+      {navCue && (
+        <div className={`nav-banner ${navCue.atTurn ? "now" : ""}`}>
+          <div className="nav-dist">
+            {navCue.atTurn || navCue.distance_m < 40 ? "Now" : fmtAhead(navCue.distance_m)}
+          </div>
+          <div className="nav-instr">{navCue.instruction}</div>
+          {navCue.total > 0 && (
+            <div className="nav-count">{Math.min(navCue.index + 1, navCue.total)}/{navCue.total}</div>
+          )}
+        </div>
+      )}
+      {navSteps.length > 0 && (
+        <ol className="directions nav-live">
+          {navSteps.slice(navCue?.index || 0, (navCue?.index || 0) + 4).map((s, k) => {
+            const abs = (navCue?.index || 0) + k;
+            return (
+              <li key={abs} className={k === 0 ? "current" : ""}>
+                <span className="dir-text">{s.icon ? `${s.icon} ` : ""}{s.instruction}</span>
+                {k === 0 && navCue ? (
+                  <span className="dir-dist">{navCue.atTurn ? "now" : fmtStepDist(navCue.distance_m)}</span>
+                ) : (
+                  s.distance_m > 0 && <span className="dir-dist">{fmtStepDist(s.distance_m)}</span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
 
       <div className="divider" />
       <div className="prep-head">

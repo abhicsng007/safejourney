@@ -30,6 +30,8 @@ export const HAZARD_ICON = {
   lightning: "🌩️",
   storm: "🌬️",
   heat: "🔥",
+  fog: "🌫️",
+  air_quality: "😷",
   landslide: "⛰️",
   glof: "🏔️",
   roadwork: "🚧",

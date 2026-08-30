@@ -8,7 +8,7 @@ import html
 import math
 import re
 
-from safejourney_shared.geo import encode_polyline, haversine_m
+from safejourney_shared.geo import bearing_deg, encode_polyline, haversine_m
 
 from ._http import get_json
 from ..config import get_settings
@@ -65,6 +65,98 @@ def _clean_steps(leg: dict) -> list[dict]:
         })
     return steps
 
+
+_COMPASS = (
+    "north", "north-east", "east", "south-east",
+    "south", "south-west", "west", "north-west",
+)
+
+
+def _compass(bearing: float) -> str:
+    return _COMPASS[int((bearing + 22.5) // 45) % 8]
+
+
+def _signed_heading_delta(prev: float, new: float) -> float:
+    """Signed turn in degrees, (-180, 180]. Positive is right."""
+    return (new - prev + 540.0) % 360.0 - 180.0
+
+
+def _turn_instruction(delta: float) -> str | None:
+    mag = abs(delta)
+    if mag < 18:
+        return None
+    side = "right" if delta > 0 else "left"
+    if mag < 45:
+        return f"Bear {side}"
+    if mag < 110:
+        return f"Turn {side}"
+    if mag < 160:
+        return f"Make a sharp {side} turn"
+    return "Make a U-turn"
+
+
+def _seg_len(pts: list[tuple[float, float]], i0: int, i1: int) -> float:
+    total = 0.0
+    for i in range(i0, i1):
+        a, b = pts[i], pts[i + 1]
+        total += haversine_m(a[0], a[1], b[0], b[1])
+    return total
+
+
+def _make_step(
+    instruction: str,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    distance_m: float,
+) -> dict:
+    return {
+        "instruction": instruction,
+        "distance_m": round(distance_m),
+        "duration_s": round(distance_m / 8.3) if distance_m else 0,
+        "start": {"lat": start[0], "lng": start[1]},
+        "end": {"lat": end[0], "lng": end[1]},
+        "feature": None,
+        "icon": None,
+    }
+
+
+def _steps_from_points(
+    pts: list[tuple[float, float]],
+    continue_every_m: float = 2000.0,
+) -> list[dict]:
+    """Synthesize Google-style turn-by-turn steps from a polyline.
+
+    Used when Directions is unavailable (no key / throttled) so the voice
+    navigator still has maneuvers to announce instead of going silent.
+    Step 0 is the departure heading. Later steps start at vertices where
+    heading changes enough to be a real turn, and on long quiet stretches
+    a 'continue' cue is dropped every ~2 km so a 15 km fallback isn't mute.
+    """
+    if len(pts) < 2:
+        return []
+    step_b = bearing_deg(pts[0][0], pts[0][1], pts[1][0], pts[1][1])
+    pending = f"Head {_compass(step_b)} toward your destination"
+    last_i = 0
+    travelled = 0.0
+    steps: list[dict] = []
+    for i in range(1, len(pts) - 1):
+        nxt = pts[i + 1]
+        b = bearing_deg(pts[i][0], pts[i][1], nxt[0], nxt[1])
+        phrase = _turn_instruction(_signed_heading_delta(step_b, b))
+        travelled += haversine_m(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+        incoming = _seg_len(pts, last_i, i)
+        is_turn = bool(phrase) and incoming >= 40
+        is_cont = travelled >= continue_every_m and incoming >= continue_every_m * 0.75
+        if not (is_turn or is_cont):
+            continue
+        steps.append(_make_step(pending, pts[last_i], pts[i], incoming))
+        pending = phrase if is_turn else "Continue toward your destination"
+        last_i = i
+        travelled = 0.0
+        step_b = b
+    steps.append(_make_step(pending, pts[last_i], pts[-1], _seg_len(pts, last_i, len(pts) - 1)))
+    return steps
+
 _MODE_MAP = {
     "walk": "walking",
     "two_wheeler": "driving",   # Directions has no 2-wheeler mode; driving is the closest.
@@ -104,6 +196,7 @@ def _fallback_routes(origin: tuple[float, float], dest: tuple[float, float]) -> 
             "duration_s": round(dist / 8.3),  # ~30 km/h
             "summary": label.replace("_", " ").title(),
             "source": "fallback",
+            "steps": _steps_from_points(pts),
         }
 
     routes.append(build(0.0, "direct", 1.0))

@@ -53,7 +53,7 @@ export const api = {
     req("/incidents", { method: "POST", body: JSON.stringify(body) }),
   triageReport: (text, lat, lng, source = "crowd") =>
     req("/incidents/triage", { method: "POST", body: JSON.stringify({ text, lat, lng, source }) }),
-  tts: (text) => req("/tts", { method: "POST", body: JSON.stringify({ text }) }),
+  tts: (text, signal) => req("/tts", { method: "POST", body: JSON.stringify({ text }), signal }),
   resetDemo: () => req("/demo/reset", { method: "POST" }),
   webAdvisories: (body) =>
     req("/web-advisories", { method: "POST", body: JSON.stringify(body) }),

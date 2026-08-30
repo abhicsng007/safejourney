@@ -60,6 +60,7 @@ export default function MapView({
   routes = [],
   selectedRouteId,
   activePolyline,
+  conditions,
   hazards = [],
   harbors = [],
   essentials = [],
@@ -386,6 +387,7 @@ export default function MapView({
   return (
     <div className="map-wrap">
       <div className="map" ref={ref} />
+      <ConditionsCard conditions={conditions} />
       <div className="legend">
         <div className="row"><span className="sw" style={{ background: "#33d08c" }} />Safe</div>
         <div className="row"><span className="sw" style={{ background: "#f0b429" }} />Caution</div>
@@ -397,6 +399,49 @@ export default function MapView({
 
 function fmtDist(m) {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+// Colour per condition level, so a glance at the card reads go / caution / avoid.
+const COND_COLOR = { good: "#33d08c", moderate: "#f0b429", poor: "#ff8a3d", bad: "#ff6150" };
+
+// Pre-trip environmental briefing pinned to the map's top-right: weather, visibility, air.
+function ConditionsCard({ conditions }) {
+  if (!conditions || conditions.source === "unavailable") return null;
+  const { weather, visibility, aqi } = conditions;
+  if (!weather && !visibility && !aqi) return null;
+  return (
+    <div className="cond-card" role="group" aria-label="Route conditions">
+      <div className="cond-title">Conditions</div>
+      {weather && (
+        <div className="cond-row">
+          <span className="cond-ic">{weather.icon || "🌡️"}</span>
+          <span className="cond-main">{weather.label}</span>
+          <span className="cond-val">
+            {Math.round(weather.temp_c)}°C
+            {weather.gusty ? <span className="cond-tag" title={`Gusts ${weather.wind_kmh} km/h`}> · windy</span> : null}
+          </span>
+        </div>
+      )}
+      {visibility && (
+        <div className="cond-row">
+          <span className="cond-ic">👁️</span>
+          <span className="cond-main">Visibility</span>
+          <span className="cond-val" style={{ color: COND_COLOR[visibility.level] }}>
+            {visibility.km} km · {visibility.label}
+          </span>
+        </div>
+      )}
+      {aqi && (
+        <div className="cond-row">
+          <span className="cond-ic">🫁</span>
+          <span className="cond-main">Air (AQI)</span>
+          <span className="cond-val" style={{ color: COND_COLOR[aqi.level] }}>
+            {aqi.us_aqi} · {aqi.category}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtReportDate(d) {
