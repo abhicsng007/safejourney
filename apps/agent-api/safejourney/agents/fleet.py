@@ -67,6 +67,34 @@ Use tools to ground every claim in real data — never invent hazards or places.
 when it matters; be brief, specific, and lead with the action. Speak the traveller's language if
 they switch. When conditions are dangerous, prioritise their safety over saving time."""
 
+# Lean chat path: one agent, one tool round, no specialist hop. The Ask Guardian UI still
+# shows the tool/citation trace; we just don't pay for extra Gemini 3 thinking hops.
+CHAT_INSTRUCTION = """You are SafeJourney's on-road Guardian. Answer THIS traveller, now.
+
+Call at most ONE tool, then reply in 2–4 short sentences. Lead with the action.
+- find_nearby — water, food, ATM, pharmacy, fuel, restroom, tea (use CURRENT lat/lng from CONTEXT)
+- get_safe_harbors — a place to wait out a hazard
+- get_mobility_options — cab / metro alternatives
+- get_precautions — how to stay safe given hazard types already in CONTEXT
+
+Do NOT replan routes. Do NOT rescan the road. CONTEXT already has the latest hazards and
+safety score — use it. Never invent places or hazards. Don't ask for their location."""
+
+
+def _chat_generate_config():
+    """Low-thinking, short replies — Ask Guardian should feel instant, not like a planner."""
+    try:
+        from google.genai import types
+        kw = {}
+        if hasattr(types, "ThinkingConfig"):
+            try:
+                kw["thinking_config"] = types.ThinkingConfig(thinking_level="low")
+            except Exception:
+                pass
+        return types.GenerateContentConfig(temperature=0.3, max_output_tokens=512, **kw)
+    except Exception:
+        return None
+
 
 @lru_cache
 def build_guardian():
@@ -112,6 +140,37 @@ def build_guardian():
                get_safe_harbors, find_nearby, get_mobility_options, get_precautions, report_incident],
     )
     return guardian
+
+
+@lru_cache
+def build_chat_guardian():
+    """Single-agent Guardian for Ask Guardian — same tools, no sub-agent delegation.
+
+    The full fleet (`build_guardian`) is right for planning / ADK web, but each
+    transfer_to_agent is another Gemini 3 thinking round-trip. Chat only needs one hop.
+    """
+    _adk()
+    from google.adk.agents import Agent
+
+    from .adk_tools import (
+        get_safe_harbors,
+        find_nearby,
+        get_mobility_options,
+        get_precautions,
+    )
+
+    s = get_settings()
+    kwargs = dict(
+        name="guardian_core",
+        model=s.gemini_model,
+        description="Fast on-road Guardian for chat.",
+        instruction=CHAT_INSTRUCTION,
+        tools=[find_nearby, get_safe_harbors, get_mobility_options, get_precautions],
+    )
+    cfg = _chat_generate_config()
+    if cfg is not None:
+        kwargs["generate_content_config"] = cfg
+    return Agent(**kwargs)
 
 
 # Expose `root_agent` so the `adk web` / `adk run` dev tools can discover the fleet.

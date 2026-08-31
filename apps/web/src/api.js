@@ -118,4 +118,31 @@ export const api = {
     req(`/mobility?lat=${lat}&lng=${lng}` + (dlat != null ? `&dlat=${dlat}&dlng=${dlng}` : "")),
   chat: (message, session_id = "web", trip_id = "") =>
     req("/agent/chat", { method: "POST", body: JSON.stringify({ message, session_id, trip_id }) }),
+  /** Stream Guardian's tool/delegation steps. Falls back to POST /agent/chat. */
+  chatLive: async (body, onEvent, signal) => {
+    try {
+      const res = await fetch(`${BASE}/agent/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (res.status === 404 || res.status === 405) {
+        return req("/agent/chat", { method: "POST", body: JSON.stringify(body), signal });
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`${res.status} ${text}`);
+      }
+      if (!res.body) {
+        return req("/agent/chat", { method: "POST", body: JSON.stringify(body), signal });
+      }
+      const result = await readSse(res, onEvent);
+      if (result) return result;
+      return req("/agent/chat", { method: "POST", body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      return req("/agent/chat", { method: "POST", body: JSON.stringify(body), signal });
+    }
+  },
 };

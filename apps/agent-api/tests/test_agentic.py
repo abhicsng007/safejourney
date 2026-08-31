@@ -122,6 +122,40 @@ def test_plan_trace_shows_multiagent_handoff():
     assert decision["action"] == "advisory"
 
 
+def test_chat_intent_routes_the_guardian_chips():
+    assert agentic.chat_intent("Where can I get water or food nearby?") == "nearby"
+    assert agentic.chat_intent("Nearest ATM and pharmacy?") == "nearby"
+    assert agentic.chat_intent("Find me a safe place to wait") == "harbor"
+    assert agentic.chat_intent("Is my route safe right now?") == "status"
+    assert agentic.chat_intent("What should I pack for the mountains?") is None
+
+
+def test_cites_from_nearby_places_are_clickable():
+    cites = agentic.cites_from_tool("find_nearby", {
+        "query": "water",
+        "places": [
+            {"name": "Bisleri store", "lat": 12.97, "lng": 77.60, "address": "MG Road"},
+            {"name": "Cafe", "lat": 12.98, "lng": 77.61},
+        ],
+    })
+    labels = [c["label"] for c in cites]
+    assert "Google Places" in labels
+    store = next(c for c in cites if c["label"] == "Bisleri store")
+    assert store["url"].startswith("https://www.google.com/maps")
+    assert "12.97" in store["url"]
+
+
+def test_cites_from_mobility_keep_provider_urls():
+    cites = agentic.cites_from_tool("get_mobility_options", {
+        "options": [
+            {"provider": "Uber", "kind": "cab",
+             "url": "https://m.uber.com/ul/?action=setPickup"},
+        ],
+    })
+    uber = next(c for c in cites if c["label"] == "Uber")
+    assert uber["url"].startswith("https://m.uber.com")
+
+
 def test_cite_plan_has_clickable_urls():
     from safejourney.sources import cite_plan
     plan = {

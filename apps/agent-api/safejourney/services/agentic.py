@@ -106,9 +106,224 @@ def _trip_context(trip_id: str) -> str:
                          f"{round(snap.safety_score, 1)}): {hz}")
         else:
             lines.append(f"- road ahead: clear (safety score {round(snap.safety_score, 1)})")
-    lines.append("For the freshest read, call check_trip_now with this trip_id. "
-                 "Answer directly and specifically about this route.")
+    lines.append("This snapshot is current enough — do not rescan. Answer from it.")
     return "\n".join(lines) + "\n\n"
+
+
+def _jsonable(obj):
+    """Make ADK tool args/results JSON-serializable for the live SSE timeline."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v) for k, v in list(obj.items())[:24]}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(x) for x in obj[:24]]
+    return str(obj)
+
+
+def _place_cite(item: dict, icon: str = "📍") -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    lat, lng = item.get("lat"), item.get("lng")
+    name = item.get("name") or item.get("label") or item.get("provider") or "Place"
+    url = (item.get("url") or "").strip()
+    if not url and lat is not None and lng is not None:
+        url = f"https://www.google.com/maps?q={lat},{lng}"
+    if not url:
+        return None
+    blurb = item.get("address") or item.get("why") or item.get("blurb") or ""
+    return {"id": f"place:{name}", "label": str(name)[:48], "blurb": str(blurb)[:80],
+            "icon": icon, "url": url}
+
+
+def cites_from_tool(name: str, response) -> list[dict]:
+    """Clickable citations produced by a tool result — Places pins, Maps links, feeds."""
+    from ..sources import describe
+
+    out: list[dict] = []
+    if not isinstance(response, dict):
+        return out
+
+    def add_catalog(sid: str):
+        c = describe(sid)
+        if c:
+            out.append(c)
+
+    if name in ("find_nearby",):
+        add_catalog("google-places")
+        for p in (response.get("places") or [])[:3]:
+            c = _place_cite(p, "📍")
+            if c:
+                out.append(c)
+    elif name == "get_safe_harbors":
+        add_catalog("google-places")
+        for h in (response.get("harbors") or [])[:3]:
+            c = _place_cite(h, "🏠")
+            if c:
+                out.append(c)
+    elif name == "plan_safe_routes":
+        add_catalog("google-directions")
+        for r in (response.get("routes") or [])[:2]:
+            for h in (r.get("hazards") or [])[:4]:
+                if isinstance(h, dict) and h.get("source"):
+                    add_catalog(h["source"])
+    elif name == "scan_route_hazards":
+        for h in (response.get("hazards") or [])[:6]:
+            if isinstance(h, dict) and h.get("source"):
+                add_catalog(h["source"])
+    elif name == "get_mobility_options":
+        add_catalog("google-places")
+        for o in (response.get("options") or [])[:4]:
+            c = _place_cite(o, "🚇" if o.get("kind") == "transit" else "🚕")
+            if c:
+                out.append(c)
+        st = response.get("nearest_station")
+        if isinstance(st, dict):
+            c = _place_cite(st, "🚉")
+            if c:
+                out.append(c)
+    elif name == "check_trip_now":
+        add_catalog("open-meteo")
+    return out
+
+
+_NEARBY_HINTS = (
+    "water", "food", "eat", "meal", "snack", "atm", "cash", "pharmacy", "medicine",
+    "fuel", "petrol", "diesel", "toilet", "restroom", "loo", "tea", "coffee", "repair",
+    "puncture", "tyre", "tire",
+)
+_HARBOR_HINTS = ("safe place", "harbour", "harbor", "shelter", "refuge", "wait out", "pull over")
+_MOBILITY_HINTS = ("uber", "ola", "cab", "taxi", "metro", "transit", "bus", "alternative")
+_STATUS_HINTS = (
+    "route safe", "safe right now", "is my route", "road ahead", "how safe",
+    "any hazard", "hazards on",
+)
+
+
+def chat_intent(message: str) -> str | None:
+    """Cheap keyword router for the Ask Guardian chips / common on-road asks.
+
+    Returns nearby | harbor | mobility | status | None (fall through to the LLM agent).
+    """
+    t = (message or "").lower()
+    if any(h in t for h in _HARBOR_HINTS):
+        return "harbor"
+    if any(h in t for h in _MOBILITY_HINTS):
+        return "mobility"
+    if any(h in t for h in _NEARBY_HINTS):
+        return "nearby"
+    if any(h in t for h in _STATUS_HINTS):
+        return "status"
+    return None
+
+
+def _trip_pos(trip_id: str):
+    """(lat, lng, dest_lat, dest_lng) or None."""
+    if not trip_id:
+        return None
+    from ..repo import get_repo
+    trip = get_repo().get_trip(trip_id)
+    if not trip:
+        return None
+    pos = trip.current_position or trip.origin
+    dest = trip.destination
+    return pos.lat, pos.lng, dest.lat, dest.lng
+
+
+def _status_reply(trip_id: str, has_pos: bool) -> str:
+    if not has_pos:
+        return "I don't have a live snapshot yet — start Guardian on a route and I'll watch it."
+    from ..repo import get_repo
+    trip = get_repo().get_trip(trip_id) if trip_id else None
+    snap = get_repo().get_snapshot(trip.last_snapshot_id) if trip and trip.last_snapshot_id else None
+    if not snap:
+        return "Guardian is watching, but I haven't scanned the road ahead yet. Give it a moment."
+    score = round(snap.safety_score, 1) if snap.safety_score is not None else None
+    hz = snap.hazards or []
+    if not hz:
+        return f"Road ahead looks clear{f' (safety score {score})' if score is not None else ''}. I'll keep watching."
+    kinds = []
+    for h in hz[:4]:
+        if isinstance(h, dict) and h.get("type"):
+            kinds.append(f"{h['type'].replace('_', ' ')} ({h.get('severity') or 'noted'})")
+    lead = f"{len(hz)} hazard(s) on the road ahead"
+    if score is not None:
+        lead += f" — score {score}"
+    return lead + (": " + ", ".join(kinds) if kinds else ".") + ". Slow down and follow the precautions."
+
+
+def _run_fast_chat(message: str, trip_id: str, intent: str, emit) -> dict:
+    """One cheap tool + one short narration. Same {reply,trace,sources,agent} shape."""
+    from ..agents import adk_tools as tools
+
+    pos = _trip_pos(trip_id)
+    emit({
+        "kind": "tool_call", "name": "read_context", "agent": "guardian_core",
+        "args": {"trip": trip_id or "none", "intent": intent},
+    })
+    emit({
+        "kind": "tool_result", "name": "read_context", "agent": "guardian_core",
+        "summary": "Loaded the active trip." if pos else "No trip in context.",
+    })
+
+    reply = ""
+    if intent == "status":
+        reply = _status_reply(trip_id, pos is not None)
+        return {"reply": reply, "trace": None, "sources": None, "agent": "guardian_core", "_emit_only": True}
+
+    if not pos:
+        reply = "I need your live position — start Guardian on a route, then ask me again."
+        emit({"kind": "tool_result", "name": "read_context", "agent": "guardian_core",
+              "summary": reply})
+        return {"reply": reply, "trace": None, "sources": None, "agent": "guardian_core", "_emit_only": True}
+
+    lat, lng, dlat, dlng = pos
+    if intent == "nearby":
+        emit({"kind": "tool_call", "name": "find_nearby", "agent": "guardian_core",
+              "args": {"query": message, "lat": round(lat, 5), "lng": round(lng, 5)}})
+        raw = tools.find_nearby(message, lat, lng)
+        emit({"kind": "tool_result", "name": "find_nearby", "agent": "guardian_core",
+              "summary": _summarize_tool_result(raw)})
+        for c in cites_from_tool("find_nearby", raw):
+            emit({"kind": "cite", "source": c})
+        places = raw.get("places") or []
+        if not places:
+            reply = "I couldn't find a nearby match just now. Try a more specific thing (ATM, pharmacy, water)."
+        else:
+            bits = [f"{p.get('name')} ({p.get('distance_m')} m)" for p in places[:3] if p.get("name")]
+            reply = "Closest: " + "; ".join(bits) + "."
+    elif intent == "harbor":
+        emit({"kind": "tool_call", "name": "get_safe_harbors", "agent": "guardian_core",
+              "args": {"lat": round(lat, 5), "lng": round(lng, 5)}})
+        raw = tools.get_safe_harbors(lat, lng)
+        emit({"kind": "tool_result", "name": "get_safe_harbors", "agent": "guardian_core",
+              "summary": _summarize_tool_result(raw)})
+        for c in cites_from_tool("get_safe_harbors", raw):
+            emit({"kind": "cite", "source": c})
+        harbors = raw.get("harbors") or []
+        if not harbors:
+            reply = "I couldn't mark a refuge nearby. Look for a staffed, lit place (metro, hospital, open store)."
+        else:
+            h = harbors[0]
+            reply = (
+                f"Head to {h.get('name') or h.get('label')} "
+                f"({h.get('distance_m')} m) — {h.get('why') or 'staffed and sheltered'}."
+            )
+    else:  # mobility
+        emit({"kind": "tool_call", "name": "get_mobility_options", "agent": "guardian_core",
+              "args": {"lat": round(lat, 5), "lng": round(lng, 5)}})
+        raw = tools.get_mobility_options(lat, lng, dlat, dlng)
+        emit({"kind": "tool_result", "name": "get_mobility_options", "agent": "guardian_core",
+              "summary": _summarize_tool_result(raw)})
+        for c in cites_from_tool("get_mobility_options", raw):
+            emit({"kind": "cite", "source": c})
+        opts = raw.get("options") or []
+        if not opts:
+            reply = "I couldn't load alternatives just now — a cab from a lit spot is the backup."
+        else:
+            names = ", ".join(o.get("provider") or o.get("kind") or "option" for o in opts[:3])
+            reply = f"You can continue via {names}. Tap a source below to open it."
+    return {"reply": reply, "trace": None, "sources": None, "agent": "guardian_core", "_emit_only": True}
 
 
 def run_agent_trace(
@@ -116,17 +331,48 @@ def run_agent_trace(
     session_id: str = "default",
     user_id: str = "local",
     trip_id: str = "",
+    on_event=None,
 ) -> dict:
-    """Run one turn through the Guardian Core fleet and capture a structured trace.
+    """Run one Ask Guardian turn and capture a structured trace.
 
-    Returns {reply, trace, agent}. `trace` is an ordered list of tool_call / tool_result
-    steps the agent took — the visible evidence of grounded, agentic behaviour. When
-    `trip_id` is given, the active trip's context is prepended so Guardian answers about it.
-    Raises RuntimeError (from build_guardian) if ADK/Gemini isn't configured.
+    Fast-path (nearby / harbor / mobility / status) skips the ADK fleet — one tool + a
+    short Gemini line — so the chips feel instant. Anything else goes through a single
+    chat agent (no specialist hop). Returns {reply, trace, sources, agent}.
     """
-    from ..agents.fleet import build_guardian
+    trace: list[dict] = []
+    sources: list[dict] = []
+    seen_src: set[str] = set()
 
-    guardian = build_guardian()  # raises a friendly error if ADK is missing
+    def emit(ev: dict):
+        if ev.get("kind") == "cite" and ev.get("source"):
+            src = ev["source"]
+            key = f"{src.get('id')}|{src.get('url') or ''}"
+            if key in seen_src:
+                return
+            seen_src.add(key)
+            sources.append(src)
+        else:
+            trace.append(ev)
+        if not on_event:
+            return
+        try:
+            on_event(ev)
+        except Exception:
+            pass
+
+    intent = chat_intent(message)
+    if intent:
+        out = _run_fast_chat(message, trip_id, intent, emit)
+        return {
+            "reply": out.get("reply") or "(no response)",
+            "trace": trace,
+            "sources": sources,
+            "agent": "guardian_core",
+        }
+
+    from ..agents.fleet import build_chat_guardian
+
+    guardian = build_chat_guardian()  # raises a friendly error if ADK is missing
     from google.adk.runners import Runner
     from google.genai import types
 
@@ -141,8 +387,20 @@ def run_agent_trace(
 
     prompt = _trip_context(trip_id) + message
     content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    trace: list[dict] = []
     reply = ""
+
+    emit({
+        "kind": "tool_call", "name": "read_context", "agent": "guardian_core",
+        "args": {"trip": trip_id or "none"},
+    })
+    emit({
+        "kind": "tool_result", "name": "read_context", "agent": "guardian_core",
+        "summary": (
+            "Loaded the active trip — answering about this journey."
+            if trip_id else "No trip in context — answering generally."
+        ),
+    })
+
     for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
         author = getattr(event, "author", "guardian_core") or "guardian_core"
         parts = (event.content.parts if event.content else None) or []
@@ -151,17 +409,17 @@ def run_agent_trace(
             fr = getattr(p, "function_response", None)
             if fc is not None:
                 name = getattr(fc, "name", "tool")
-                args = dict(getattr(fc, "args", {}) or {})
+                args = _jsonable(dict(getattr(fc, "args", {}) or {}))
                 # ADK delegates by calling the special `transfer_to_agent` tool. Surface it
                 # as a first-class delegation step — the visible multi-agent hand-off.
                 if name == "transfer_to_agent":
-                    trace.append({
+                    emit({
                         "kind": "delegate",
                         "from": author,
                         "to": args.get("agent_name") or args.get("agent") or "specialist",
                     })
                 else:
-                    trace.append({
+                    emit({
                         "kind": "tool_call",
                         "name": name,
                         "args": args,
@@ -171,15 +429,24 @@ def run_agent_trace(
                 name = getattr(fr, "name", "tool")
                 if name == "transfer_to_agent":
                     continue  # the delegate step already conveys this
-                trace.append({
+                raw = getattr(fr, "response", None)
+                raw = _jsonable(raw)
+                emit({
                     "kind": "tool_result",
                     "name": name,
-                    "summary": _summarize_tool_result(getattr(fr, "response", None)),
+                    "summary": _summarize_tool_result(raw),
                     "agent": author,
                 })
+                for c in cites_from_tool(name, raw):
+                    emit({"kind": "cite", "source": c})
         if event.is_final_response() and parts:
             reply = "".join(getattr(p, "text", "") or "" for p in parts)
-    return {"reply": reply or "(no response)", "trace": trace, "agent": "guardian_core"}
+    return {
+        "reply": reply or "(no response)",
+        "trace": trace,
+        "sources": sources,
+        "agent": "guardian_core",
+    }
 
 
 # ---------------------------------------------------------------------------

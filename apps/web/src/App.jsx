@@ -4,6 +4,7 @@ import {
   ReasoningTrace,
   PlanReasoningCard,
   ReasoningTheater,
+  ChatReasoning,
   SourcesBar,
   mergeCite,
   playFallbackScan,
@@ -1720,34 +1721,65 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
 }
 
 function GuardianChat({ trip }) {
-  const [log, setLog] = useState([]); // {role:'user'|'agent', text, trace?}
+  const [log, setLog] = useState([]); // {role:'user'|'agent', text, trace?, sources?}
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const [liveTrace, setLiveTrace] = useState([]);
+  const [liveSources, setLiveSources] = useState([]);
   const endRef = useRef(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [log, busy]);
+  }, [log, busy, liveTrace]);
 
-  async function send() {
-    const q = text.trim();
+  async function send(preset) {
+    const q = (preset ?? text).trim();
     if (!q || busy) return;
     setText("");
     setLog((l) => [...l, { role: "user", text: q }]);
     setBusy(true);
+    setLiveTrace([{
+      kind: "tool_call", name: "read_context", agent: "guardian_core",
+      args: { trip: trip?.id || "none" },
+    }]);
+    setLiveSources([]);
+    const sink = { trace: [], sources: [] };
+    const onEvent = (ev) => {
+      if (!ev || ev.kind === "done" || ev.kind === "error") return;
+      if (ev.kind === "cite" && ev.source) {
+        sink.sources = mergeCite(sink.sources, ev.source);
+        setLiveSources(sink.sources);
+        return;
+      }
+      sink.trace = [...sink.trace, ev];
+      setLiveTrace(sink.trace);
+    };
     try {
-      const res = await api.chat(q, trip?.id || "web", trip?.id || "");
+      const res = await api.chatLive(
+        { message: q, session_id: trip?.id || "web", trip_id: trip?.id || "" },
+        onEvent
+      );
       if (res.error) {
         setUnavailable(true);
-        setLog((l) => [...l, { role: "agent", text: "Guardian AI isn't configured (no Gemini key) — the rule-based guardian is still watching your route.", trace: [] }]);
+        setLog((l) => [...l, {
+          role: "agent",
+          text: "Guardian AI isn't configured (no Gemini key) — the rule-based guardian is still watching your route.",
+          trace: sink.trace,
+          sources: sink.sources,
+        }]);
       } else {
-        setLog((l) => [...l, { role: "agent", text: res.reply, trace: res.trace || [] }]);
+        const trace = (res.trace && res.trace.length) ? res.trace : sink.trace;
+        let sources = sink.sources;
+        for (const s of res.sources || []) sources = mergeCite(sources, s);
+        setLog((l) => [...l, { role: "agent", text: res.reply, trace, sources }]);
       }
     } catch (e) {
-      setLog((l) => [...l, { role: "agent", text: `Couldn't reach Guardian: ${e.message || e}`, trace: [] }]);
+      setLog((l) => [...l, { role: "agent", text: `Couldn't reach Guardian: ${e.message || e}`, trace: sink.trace, sources: sink.sources }]);
     } finally {
       setBusy(false);
+      setLiveTrace([]);
+      setLiveSources([]);
     }
   }
 
@@ -1761,10 +1793,13 @@ function GuardianChat({ trip }) {
   return (
     <div className="chat">
       <span className="section-label">Ask Guardian</span>
-      {log.length === 0 && (
+      <div className="hint" style={{ marginTop: -6 }}>
+        Answers are grounded in live tools — you’ll see each check, then a source you can open.
+      </div>
+      {log.length === 0 && !busy && (
         <div className="pills">
           {suggestions.map((s) => (
-            <button key={s} className="pill" style={{ cursor: "pointer" }} onClick={() => setText(s)}>
+            <button key={s} className="pill" style={{ cursor: "pointer" }} onClick={() => send(s)}>
               {s}
             </button>
           ))}
@@ -1773,11 +1808,23 @@ function GuardianChat({ trip }) {
       <div className="chat-log">
         {log.map((m, i) => (
           <div className={`msg ${m.role}`} key={i}>
-            <div className="bubble">{m.text}</div>
-            {m.trace?.length > 0 && <ReasoningTrace trace={m.trace} />}
+            {m.role === "user" ? (
+              <div className="bubble">{m.text}</div>
+            ) : (
+              <>
+                {m.text && <div className="bubble">{m.text}</div>}
+                {(m.trace?.length > 0 || m.sources?.length > 0) && (
+                  <ChatReasoning trace={m.trace} sources={m.sources} />
+                )}
+              </>
+            )}
           </div>
         ))}
-        {busy && <div className="msg agent"><div className="bubble">Guardian is thinking…</div></div>}
+        {busy && (
+          <div className="msg agent">
+            <ChatReasoning trace={liveTrace} sources={liveSources} live />
+          </div>
+        )}
         <div ref={endRef} />
       </div>
       <div className="chat-input">
@@ -1786,8 +1833,9 @@ function GuardianChat({ trip }) {
           placeholder="Ask about your route…"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
+          disabled={busy || unavailable}
         />
-        <button className="btn btn-primary" style={{ padding: "8px 14px" }} onClick={send} disabled={busy}>
+        <button className="btn btn-primary" style={{ padding: "8px 14px" }} onClick={() => send()} disabled={busy || unavailable}>
           Send
         </button>
       </div>

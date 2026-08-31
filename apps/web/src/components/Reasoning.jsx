@@ -25,6 +25,7 @@ const TOOL_META = {
   change_detection: { icon: "🧮", label: "change detection" },
   find_reroute: { icon: "🧭", label: "search for safer path" },
   find_nearby: { icon: "📍", label: "find nearby" },
+  read_context: { icon: "🧠", label: "read trip context" },
 };
 const ACTION_VERB = {
   reroute: "REROUTE",
@@ -56,6 +57,7 @@ export function mergeCite(list, src) {
 }
 
 const FLEET = ["guardian_core", "route_guardian", "hazard_sentinel", "prep"];
+export const CHAT_FLEET = ["guardian_core", "route_guardian", "safe_harbor", "mobility", "sos"];
 
 function activeAgent(trace) {
   if (!trace?.length) return "guardian_core";
@@ -217,12 +219,12 @@ export function ReasoningTrace({ trace, sources, live = false, defaultOpen = tru
   );
 }
 
-function AgentFleet({ trace, live }) {
+function AgentFleet({ trace, live, ids = FLEET }) {
   const current = activeAgent(trace);
   const done = doneAgents(trace);
   return (
     <div className="fleet" role="list">
-      {FLEET.map((id, i) => {
+      {ids.map((id, i) => {
         const m = agentMeta(id);
         const isOn = current === id;
         const isDone = done.has(id) && !isOn;
@@ -330,6 +332,32 @@ export function ScanHud({ trace, sources, visible }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Live + finished reasoning card used inside Ask Guardian. */
+export function ChatReasoning({ trace, sources, live = false }) {
+  const current = agentMeta(activeAgent(trace));
+  return (
+    <div className={`chat-reason ${live ? "is-live" : ""}`}>
+      {live && (
+        <>
+          <div className="theater-kicker">
+            <span className="th-pulse" />
+            Guardian is reasoning
+          </div>
+          <AgentFleet trace={trace} live ids={CHAT_FLEET} />
+          <div className="theater-now">
+            <span className="th-now-ic">{current.icon}</span>
+            <div>
+              <div className="th-now-ag">{current.label}</div>
+              <div className="th-now-line">{nowLine(trace)}</div>
+            </div>
+          </div>
+        </>
+      )}
+      <ReasoningTrace trace={trace} sources={sources} live={live} defaultOpen />
     </div>
   );
 }

@@ -315,6 +315,8 @@ def create_trip_stream(req: CreateTripReq):
     threading.Thread(target=work, daemon=True).start()
 
     def gen():
+        # Pad so proxies / Cloud Run flush the first event instead of buffering a tiny frame.
+        yield ": " + (" " * 2048) + "\n\n"
         while True:
             ev = q.get()
             if ev is None:
@@ -525,16 +527,71 @@ def demo_force_hazard(req: ForceHazardReq) -> dict:
 
 
 # ---------- agent chat (ADK) ----------
+def _agent_chat(req: ChatReq, on_event=None) -> dict:
+    from .services.agentic import run_agent_trace
+
+    return run_agent_trace(
+        req.message, req.session_id, req.user_id, req.trip_id, on_event=on_event
+    )
+
+
 @app.post("/agent/chat")
 def agent_chat(req: ChatReq) -> dict:
     try:
-        from .services.agentic import run_agent_trace
-
-        return run_agent_trace(req.message, req.session_id, req.user_id, req.trip_id)
+        return _agent_chat(req)
     except RuntimeError as e:
         # ADK/Gemini not configured — return a clear, non-fatal message.
-        return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}
+        return {"reply": None, "trace": [], "sources": [], "error": str(e), "agent": "guardian_core"}
     except Exception as e:  # pragma: no cover - keep the endpoint resilient for demos
         import traceback
         print("[agent_chat] error:", traceback.format_exc(), flush=True)
-        return {"reply": None, "trace": [], "error": str(e), "agent": "guardian_core"}
+        return {"reply": None, "trace": [], "sources": [], "error": str(e), "agent": "guardian_core"}
+
+
+@app.post("/agent/chat/stream")
+def agent_chat_stream(req: ChatReq):
+    """Same as POST /agent/chat, but streams each multi-agent hand-off as SSE so the Ask
+    Guardian panel can show live reasoning. Final event: `{kind: "done", result: ...}`.
+    """
+    import queue
+    import threading
+
+    q: queue.Queue = queue.Queue()
+
+    def emit(ev: dict):
+        q.put(ev)
+
+    def work():
+        try:
+            result = _agent_chat(req, on_event=emit)
+            q.put({"kind": "done", "result": result})
+        except RuntimeError as e:
+            q.put({"kind": "done", "result": {
+                "reply": None, "trace": [], "sources": [],
+                "error": str(e), "agent": "guardian_core",
+            }})
+        except Exception as e:  # pragma: no cover
+            q.put({"kind": "error", "message": str(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        # Pad so proxies / Cloud Run flush the first event instead of buffering a tiny frame.
+        yield ": " + (" " * 2048) + "\n\n"
+        while True:
+            ev = q.get()
+            if ev is None:
+                break
+            yield f"data: {json.dumps(ev, default=str)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

@@ -101,8 +101,9 @@ def _thinking_off(types, model: str = "") -> dict:
 
     gemini-2.5-* / 1.5-* accept thinking_budget=0 to disable thinking outright (with a small
     max_output_tokens the thinking tokens otherwise consume the whole budget and the answer
-    comes back empty). gemini-3.x REJECT budget=0 ("invalid argument") — they always think —
-    so there we leave thinking on and instead give the call output headroom (see _max_out)."""
+    comes back empty). gemini-3.x REJECT budget=0 — they always think. Their default level is
+    medium/high, which makes chat feel stuck; `low` is the fast setting 3.7-flash accepts
+    (`minimal` 400s on 3.7)."""
     m = model or ""
     if not hasattr(types, "ThinkingConfig"):
         return {}
@@ -111,7 +112,10 @@ def _thinking_off(types, model: str = "") -> dict:
             return {"thinking_config": types.ThinkingConfig(thinking_budget=0)}
         except Exception:
             return {}
-    return {}  # 3.x and unknown models: don't cap (budget=0 is invalid on 3.x)
+    try:
+        return {"thinking_config": types.ThinkingConfig(thinking_level="low")}
+    except Exception:
+        return {}
 
 
 def _max_out(model: str, requested: int) -> int:
