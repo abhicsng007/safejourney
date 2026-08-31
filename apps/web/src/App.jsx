@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import MapView from "./components/MapView.jsx";
+import {
+  ReasoningTrace,
+  PlanReasoningCard,
+  ReasoningTheater,
+  SourcesBar,
+  mergeCite,
+  playFallbackScan,
+} from "./components/Reasoning.jsx";
 import { api } from "./api.js";
 import { enablePush, fcmConfigured } from "./lib/fcm.js";
 import { decodePolyline } from "./lib/polyline.js";
@@ -36,37 +44,6 @@ function fmtMin(s) {
 // Format a web-report date ("2026-08-26" or "2026-08") into a short human label.
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// ---- agent-reasoning display maps (powers the visible reasoning timeline) ----
-const AGENT_META = {
-  guardian_core: { label: "Guardian Core", icon: "🧭" },
-  guardian: { label: "Guardian Core", icon: "🧭" },
-  prep: { label: "Prep Agent", icon: "🎒" },
-  route_guardian: { label: "Route Guardian", icon: "🛡" },
-  safe_harbor: { label: "Safe Harbor", icon: "🏠" },
-  mobility: { label: "Mobility Agent", icon: "🚇" },
-  sos: { label: "SOS Guardian", icon: "🆘" },
-  hazard_sentinel: { label: "Hazard Sentinel", icon: "📡" },
-  decision_agent: { label: "Decision Agent", icon: "⚖" },
-};
-const agentMeta = (id) => AGENT_META[id] || { label: id || "Agent", icon: "◆" };
-const TOOL_META = {
-  plan_safe_routes: { icon: "🗺", label: "plan safe routes" },
-  scan_route_hazards: { icon: "🔎", label: "scan road ahead" },
-  check_trip_now: { icon: "📡", label: "check trip now" },
-  get_safe_harbors: { icon: "🏠", label: "find safe harbours" },
-  get_mobility_options: { icon: "🚇", label: "find alternatives" },
-  get_precautions: { icon: "📋", label: "get precautions" },
-  report_incident: { icon: "⚠", label: "report incident" },
-  change_detection: { icon: "🧮", label: "change detection" },
-  find_reroute: { icon: "🧭", label: "search for safer path" },
-};
-const ACTION_VERB = {
-  reroute: "REROUTE",
-  harbor: "TAKE SHELTER",
-  advisory: "ADVISORY",
-  sos: "ESCALATE / SOS",
-  clear: "ALL CLEAR",
-};
 const SEVERITY_RANK = { critical: 4, high: 3, moderate: 2, low: 1 };
 
 // Fastest-route (what a plain nav app picks) vs. SafeJourney's safety-ranked pick.
@@ -88,19 +65,6 @@ function routeComparison(plan) {
     .sort((a, b) => (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0));
   const extraMin = Math.round(((safest.duration_s || 0) - (fastest.duration_s || 0)) / 60);
   return { agree: false, fastest, safest, avoided, extraMin };
-}
-const toolMeta = (name) => TOOL_META[name] || { icon: "🛠", label: name };
-function fmtArgs(args) {
-  if (!args || typeof args !== "object") return "";
-  const parts = [];
-  for (const [k, v] of Object.entries(args)) {
-    if (v == null || v === "") continue;
-    let s = typeof v === "object" ? JSON.stringify(v) : String(v);
-    if (s.length > 28) s = s.slice(0, 27) + "…";
-    parts.push(`${k}: ${s}`);
-    if (parts.length >= 3) break;
-  }
-  return parts.join(" · ");
 }
 function fmtReportDate(d) {
   const s = (d || "").trim();
@@ -312,7 +276,10 @@ export default function App() {
   const [essentials, setEssentials] = useState([]);
   const [pedFeatures, setPedFeatures] = useState([]);
   const [webAdvisories, setWebAdvisories] = useState([]);
+  const [webCitations, setWebCitations] = useState([]);
   const [webBusy, setWebBusy] = useState(false);
+  const [scanTrace, setScanTrace] = useState([]);
+  const [scanSources, setScanSources] = useState([]);
   const [mobility, setMobility] = useState(null);
   const [position, setPosition] = useState(null);
   const [simulating, setSimulating] = useState(false);
@@ -432,26 +399,62 @@ export default function App() {
   async function findRoute() {
     if (!origin || !destination) return;
     setBusy(true);
+    setScanTrace([]);
+    setScanSources([]);
+    const applyEvent = (ev, sink) => {
+      if (!ev || ev.kind === "done" || ev.kind === "error") return;
+      if (ev.kind === "cite" && ev.source) {
+        sink.sources = mergeCite(sink.sources, ev.source);
+        setScanSources(sink.sources);
+        return;
+      }
+      sink.trace = [...sink.trace, ev];
+      setScanTrace(sink.trace);
+    };
+    // Keep the theater moving even if the SSE stream is slow or unavailable.
+    const staged = { trace: [], sources: [] };
+    const live = { trace: [], sources: [] };
+    const stopFallback = playFallbackScan((ev) => applyEvent(ev, staged));
+    let usedLive = false;
+    const onLive = (ev) => {
+      if (!usedLive) {
+        usedLive = true;
+        stopFallback();
+        setScanTrace([]);
+        setScanSources([]);
+      }
+      applyEvent(ev, live);
+    };
     try {
-      const res = await api.createTrip({
+      const body = {
         uid: "web-demo",
         origin,
         destination,
         mode,
         origin_label: originLabel || "Origin",
         destination_label: destLabel || "Destination",
-      });
+      };
+      const res = await api.createTripLive(body, onLive);
+      stopFallback();
+      const agent = res.plan?.agent || {};
+      const liveTrace = usedLive && live.trace.length ? live.trace : (agent.trace || []);
+      let liveSources = usedLive ? live.sources : [];
+      for (const s of agent.sources || []) liveSources = mergeCite(liveSources, s);
+      if (res.plan) res.plan.agent = { ...agent, trace: liveTrace, sources: liveSources };
       setTrip(res.trip);
       setPlan(res.plan);
       setPrep(res.prep);
       setConditions(res.plan.conditions || null);
       setSelectedRouteId(res.plan.recommended_route_id);
       setHazards(selectedHazards(res.plan, res.plan.recommended_route_id));
+      setScanTrace(liveTrace);
+      setScanSources(liveSources);
       setPhase("prep");
       setFitKey((k) => k + 1);
       // Web-grounded advisories stream in after routes are shown (they take a few seconds).
       fetchWebAdvisories(res.plan);
     } catch (e) {
+      stopFallback();
       pushToast("Couldn't plan route", String(e.message || e), "#ff6150");
     } finally {
       setBusy(false);
@@ -467,6 +470,7 @@ export default function App() {
     const r = p.routes?.find((x) => x.route_id === p.recommended_route_id) || p.routes?.[0];
     if (!r?.encoded_polyline) return;
     setWebAdvisories([]);
+    setWebCitations([]);
     setWebBusy(true);
     try {
       const res = await api.webAdvisories({
@@ -475,8 +479,10 @@ export default function App() {
         encoded_polyline: r.encoded_polyline,
       });
       setWebAdvisories(res.advisories || []);
+      setWebCitations(res.citations || []);
     } catch {
       setWebAdvisories([]);
+      setWebCitations([]);
     } finally {
       setWebBusy(false);
     }
@@ -1044,6 +1050,9 @@ export default function App() {
     setEssentials([]);
     setPedFeatures([]);
     setWebAdvisories([]);
+    setWebCitations([]);
+    setScanTrace([]);
+    setScanSources([]);
     setMobility(null);
     setPosition(null);
     setSafetyScore(null);
@@ -1086,7 +1095,17 @@ export default function App() {
         </div>
 
         <div className="body">
-          {phase === "plan" && (
+          {phase === "plan" && busy && (
+            <ReasoningTheater
+              trace={scanTrace}
+              sources={scanSources}
+              originLabel={originLabel}
+              destLabel={destLabel === "Destination" ? "" : destLabel}
+              modeLabel={MODES.find((m) => m.id === mode)?.label}
+            />
+          )}
+
+          {phase === "plan" && !busy && (
             <PlanPanel
               mode={mode}
               setMode={setMode}
@@ -1113,6 +1132,7 @@ export default function App() {
               plan={plan}
               mode={mode}
               webAdvisories={webAdvisories}
+              webCitations={webCitations}
               webBusy={webBusy}
               proceed={() => {
                 setPhase("routes");
@@ -1133,6 +1153,7 @@ export default function App() {
               startGuardian={startGuardian}
               busy={busy}
               webAdvisories={webAdvisories}
+              webCitations={webCitations}
               webBusy={webBusy}
               mode={mode}
               pedFeatures={pedFeatures}
@@ -1188,6 +1209,8 @@ export default function App() {
         followTraveler={simulating}
         onMapClick={setting ? onMapClick : null}
         scanning={phase === "plan" && busy}
+        scanTrace={scanTrace}
+        scanSources={scanSources}
         fitKey={fitKey}
         focusPoint={focusPoint}
       />
@@ -1384,33 +1407,11 @@ function PlanPanel({ mode, setMode, presetIdx, applyPreset, setting, setSetting,
   );
 }
 
-function AgentNote({ agent }) {
-  if (!agent) return null;
-  return (
-    <>
-      {agent.summary && (
-        <div className="agent-note">
-          <div className="a-head">
-            <span className="beacon" style={{ transform: "scale(0.7)" }}><span /></span>
-            Guardian reasoning
-          </div>
-          <div className="a-body">{agent.summary}</div>
-        </div>
-      )}
-      {agent.provenance?.length > 0 && (
-        <div className="provenance">
-          <span className="pv-label">grounded by</span>
-          {agent.provenance.map((s) => (
-            <span className="chip" key={s}>{s}</span>
-          ))}
-        </div>
-      )}
-    </>
+function WebAdvisoriesBlock({ webAdvisories, webBusy, webCitations = [] }) {
+  if (!webBusy && (!webAdvisories || webAdvisories.length === 0) && !webCitations.length) return null;
+  const extra = (webCitations || []).filter(
+    (c) => c.url && !(webAdvisories || []).some((a) => a.url === c.url)
   );
-}
-
-function WebAdvisoriesBlock({ webAdvisories, webBusy }) {
-  if (!webBusy && (!webAdvisories || webAdvisories.length === 0)) return null;
   return (
     <>
       <div className="divider" />
@@ -1418,24 +1419,54 @@ function WebAdvisoriesBlock({ webAdvisories, webBusy }) {
       {webBusy && webAdvisories.length === 0 && (
         <div className="hint">Researching recent road works, closures & warnings on the web…</div>
       )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {webAdvisories.map((a, i) => (
-          <div className="agent-note" key={i} style={{ borderLeftColor: "#c9a227" }}>
-            <div className="a-head" style={{ color: "#c9a227", display: "flex", gap: 8, alignItems: "baseline" }}>
-              <span style={{ flex: 1 }}>{HAZARD_ICON[a.type] || "🌐"} {hazardLabel(a.type)} · {a.locality}</span>
-              {a.date && (
-                <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", opacity: 0.9 }}>
-                  📅 {fmtReportDate(a.date)}
-                </span>
-              )}
+      <div className="web-list">
+        {webAdvisories.map((a, i) => {
+          const body = (
+            <>
+              <div className="a-head" style={{ color: "#c9a227", display: "flex", gap: 8, alignItems: "baseline" }}>
+                <span style={{ flex: 1 }}>{HAZARD_ICON[a.type] || "🌐"} {hazardLabel(a.type)} · {a.locality}</span>
+                {a.date && (
+                  <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", opacity: 0.9 }}>
+                    📅 {fmtReportDate(a.date)}
+                  </span>
+                )}
+              </div>
+              <div className="a-body">{a.summary}</div>
+              <div className="web-src">
+                <span>{a.source}{a.date ? ` · ${fmtReportDate(a.date)}` : ""} · unverified</span>
+                {a.url && <span className="cite-ext">Open source ↗</span>}
+              </div>
+            </>
+          );
+          return a.url ? (
+            <a
+              className="agent-note web-card"
+              key={i}
+              href={a.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ borderLeftColor: "#c9a227" }}
+            >
+              {body}
+            </a>
+          ) : (
+            <div className="agent-note" key={i} style={{ borderLeftColor: "#c9a227" }}>
+              {body}
             </div>
-            <div className="a-body">{a.summary}</div>
-            <div className="hint" style={{ fontStyle: "italic" }}>
-              source: {a.source}{a.date ? ` · reported ${fmtReportDate(a.date)}` : ""} · unverified, approximate
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+      {extra.length > 0 && (
+        <SourcesBar
+          sources={extra.map((c) => ({
+            id: c.url,
+            label: c.title || "Web source",
+            url: c.url,
+            icon: "🔗",
+          }))}
+          label="Also cited"
+        />
+      )}
     </>
   );
 }
@@ -1446,7 +1477,7 @@ const VERDICT_META = {
   wait: { color: "#ff6150", label: "Better to wait", ic: "⏸" },
 };
 
-function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
+function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy, webCitations }) {
   const [items, setItems] = useState(() => prep.checklist.map((c) => ({ ...c })));
   const meta = VERDICT_META[prep.verdict] || VERDICT_META.caution;
   const firstLeg = plan?.first_leg;
@@ -1466,7 +1497,7 @@ function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
         </div>
       </div>
 
-      <AgentNote agent={plan?.agent} />
+      <PlanReasoningCard agent={plan?.agent} />
 
       {firstLeg && (
         <div className="agent-note" style={{ borderLeftColor: "#f0b429" }}>
@@ -1497,7 +1528,7 @@ function PrepPanel({ prep, plan, mode, proceed, webAdvisories, webBusy }) {
         ))}
       </div>
 
-      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} />
+      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} webCitations={webCitations} />
 
       <button className="btn btn-primary" onClick={proceed}>
         See safe routes →
@@ -1568,12 +1599,12 @@ function RouteTradeoff({ plan, onSelect }) {
   );
 }
 
-function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy, mode, pedFeatures = [] }) {
+function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuardian, busy, webAdvisories, webBusy, webCitations, mode, pedFeatures = [] }) {
   const steps = selectedRoute?.meta?.steps || [];
   const isWalk = mode === "walk";
   return (
     <>
-      <AgentNote agent={plan.agent} />
+      <PlanReasoningCard agent={plan.agent} traceOpen={false} />
       <div className="hint">{plan.advice}</div>
       <RouteTradeoff plan={plan} onSelect={onSelect} />
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1675,7 +1706,7 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
         </>
       )}
 
-      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} />
+      <WebAdvisoriesBlock webAdvisories={webAdvisories} webBusy={webBusy} webCitations={webCitations} />
 
       <button className="btn btn-primary" onClick={startGuardian} disabled={busy}>
         {busy ? "Starting…" : "Start Guardian on this route"}
@@ -1685,93 +1716,6 @@ function RoutesPanel({ plan, selectedRouteId, onSelect, selectedRoute, startGuar
         you — even with the app closed (via push in the cloud build).
       </div>
     </>
-  );
-}
-
-function ReasoningTrace({ trace }) {
-  const [open, setOpen] = useState(true);
-  const steps = trace.filter((t) => t.kind !== "tool_result" || t.summary);
-  const nCalls = trace.filter((t) => t.kind === "tool_call").length;
-  const nAgents = new Set(
-    trace.filter((t) => t.kind === "delegate").map((t) => t.to)
-  ).size;
-  const summary =
-    `${nCalls} tool ${nCalls === 1 ? "call" : "calls"}` +
-    (nAgents ? ` · ${nAgents} specialist${nAgents === 1 ? "" : "s"}` : "");
-
-  return (
-    <div className={`reasoning ${open ? "open" : ""}`}>
-      <button className="reason-head" onClick={() => setOpen((v) => !v)}>
-        <span className="rh-title">◆ Guardian reasoning</span>
-        <span className="rh-sub">{summary}</span>
-        <span className="rh-chev">{open ? "▾" : "▸"}</span>
-      </button>
-      {open && (
-        <ol className="reason-steps">
-          {steps.map((t, j) => {
-            if (t.kind === "delegate") {
-              const to = agentMeta(t.to);
-              return (
-                <li className="rstep delegate" key={j}>
-                  <span className="rdot" />
-                  <span className="rbody">
-                    <span className="deleg">
-                      <span className="ag-badge">{agentMeta(t.from).icon} {agentMeta(t.from).label}</span>
-                      <span className="arrow">→</span>
-                      <span className="ag-badge to">{to.icon} {to.label}</span>
-                    </span>
-                    <span className="rmeta">delegated</span>
-                  </span>
-                </li>
-              );
-            }
-            if (t.kind === "decision") {
-              return (
-                <li className="rstep decision" key={j}>
-                  <span className="rdot" />
-                  <span className="rbody">
-                    <span className="rline">
-                      <span className="ricon">⚖</span>
-                      <span className="dec-verdict">{ACTION_VERB[t.action] || t.action}</span>
-                      {t.decided_by && (
-                        <span className="dec-by">decided by {t.decided_by}</span>
-                      )}
-                    </span>
-                    {t.reason && <span className="dec-reason">{t.reason}</span>}
-                  </span>
-                </li>
-              );
-            }
-            if (t.kind === "tool_call") {
-              const tm = toolMeta(t.name);
-              const args = fmtArgs(t.args);
-              return (
-                <li className="rstep call" key={j}>
-                  <span className="rdot" />
-                  <span className="rbody">
-                    <span className="rline">
-                      <span className="ricon">{tm.icon}</span>
-                      <span className="rname">{tm.label}</span>
-                      {t.agent && <span className="rby">{agentMeta(t.agent).label}</span>}
-                    </span>
-                    {args && <span className="rargs">{args}</span>}
-                  </span>
-                </li>
-              );
-            }
-            // tool_result
-            return (
-              <li className="rstep result" key={j}>
-                <span className="rdot" />
-                <span className="rbody">
-                  <span className="rresult">↳ {t.summary}</span>
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
   );
 }
 

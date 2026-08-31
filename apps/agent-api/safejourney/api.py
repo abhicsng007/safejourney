@@ -15,6 +15,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from safejourney_shared.models import LatLng, Incident
@@ -142,14 +143,11 @@ def config() -> dict:
 # ---------- planning ----------
 @app.post("/plan")
 def plan(req: PlanReq) -> dict:
-    result = plan_and_score(
-        (req.origin.lat, req.origin.lng),
-        (req.destination.lat, req.destination.lng),
-        req.mode,
-        req.risk_tolerance,
-    )
+    origin = (req.origin.lat, req.origin.lng)
+    dest = (req.destination.lat, req.destination.lng)
+    result = plan_and_score(origin, dest, req.mode, req.risk_tolerance)
     if req.agentic:
-        agent = plan_reasoning(result, req.mode)
+        agent = plan_reasoning(result, req.mode, origin=origin, dest=dest)
         if agent:
             result["agent"] = agent
     return result
@@ -258,13 +256,15 @@ def web_advisories(req: WebAdvisoryReq) -> dict:
         flush=True,
     )
     if req.debug:
-        return res  # {"advisories": [...], "diag": {...}}
-    return {"advisories": res["advisories"]}
+        return res  # {"advisories": [...], "diag": {...}, "citations": [...]}
+    return {"advisories": res["advisories"], "citations": res.get("citations") or []}
 
 
 # ---------- trips ----------
-@app.post("/trips")
-def create_trip(req: CreateTripReq) -> dict:
+def _finish_trip(req: CreateTripReq, on_event=None) -> dict:
+    """Shared plan + Gemini rationale + prep briefing used by POST /trips and the SSE stream."""
+    origin = (req.origin.lat, req.origin.lng)
+    dest = (req.destination.lat, req.destination.lng)
     res = trips_svc.create_trip(
         uid=req.uid,
         origin=req.origin,
@@ -273,12 +273,63 @@ def create_trip(req: CreateTripReq) -> dict:
         origin_label=req.origin_label,
         destination_label=req.destination_label,
         risk_tolerance=req.risk_tolerance,
+        on_event=on_event,
     )
-    agent = plan_reasoning(res.get("plan", {}), req.mode)
+    agent = plan_reasoning(
+        res.get("plan", {}), req.mode, origin=origin, dest=dest, on_event=on_event,
+    )
     if agent:
         res["plan"]["agent"] = agent
     res["prep"] = readiness(res.get("plan", {}), req.mode)
     return res
+
+
+@app.post("/trips")
+def create_trip(req: CreateTripReq) -> dict:
+    return _finish_trip(req)
+
+
+@app.post("/trips/stream")
+def create_trip_stream(req: CreateTripReq):
+    """Same as POST /trips, but streams each multi-agent hand-off as SSE `data:` events so
+    the UI can show the fleet reasoning live while routes are being scored. The final event
+    is `{kind: "done", result: <create_trip payload>}`.
+    """
+    import queue
+    import threading
+
+    q: queue.Queue = queue.Queue()
+
+    def emit(ev: dict):
+        q.put(ev)
+
+    def work():
+        try:
+            result = _finish_trip(req, on_event=emit)
+            q.put({"kind": "done", "result": result})
+        except Exception as e:  # pragma: no cover
+            q.put({"kind": "error", "message": str(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        while True:
+            ev = q.get()
+            if ev is None:
+                break
+            yield f"data: {json.dumps(ev, default=str)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/trips")

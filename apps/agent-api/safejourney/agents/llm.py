@@ -127,6 +127,15 @@ def _max_out(model: str, requested: int) -> int:
 def generate_with_search(prompt: str, system: str = "", max_tokens: int = 2048) -> Optional[str]:
     """Generate grounded in live Google Search results (Vertex 'Grounding with Google Search').
     Returns the model's text (which we ask to be JSON) or None on any failure."""
+    out = generate_with_search_cited(prompt, system=system, max_tokens=max_tokens)
+    return out["text"] if out else None
+
+
+def generate_with_search_cited(
+    prompt: str, system: str = "", max_tokens: int = 2048
+) -> Optional[dict]:
+    """Like generate_with_search, but also returns the grounding chunks (title + url) so the
+    UI can cite clickable sources. Returns {text, citations} or None."""
     client = _client()
     if client is None:
         return None
@@ -143,10 +152,37 @@ def generate_with_search(prompt: str, system: str = "", max_tokens: int = 2048) 
             **_thinking_off(types, s.gemini_model),
         )
         resp = client.models.generate_content(model=s.gemini_model, contents=prompt, config=cfg)
-        return (resp.text or "").strip() or None
+        text = (resp.text or "").strip() or None
+        if not text:
+            return None
+        return {"text": text, "citations": _grounding_citations(resp)}
     except Exception as e:  # pragma: no cover - grounding may be unavailable
         print(f"[llm] grounded search failed ({e})")
         return None
+
+
+def _grounding_citations(resp) -> list[dict]:
+    """Pull web {title, url} chunks out of a Gemini Search-grounded response."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    try:
+        cands = getattr(resp, "candidates", None) or []
+        for cand in cands:
+            gm = getattr(cand, "grounding_metadata", None)
+            chunks = getattr(gm, "grounding_chunks", None) or []
+            for ch in chunks:
+                web = getattr(ch, "web", None)
+                if web is None:
+                    continue
+                url = (getattr(web, "uri", None) or getattr(web, "url", None) or "").strip()
+                title = (getattr(web, "title", None) or "").strip()
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                out.append({"title": title or url, "url": url})
+    except Exception:
+        return out
+    return out
 
 
 def parse_json_array(raw: str) -> list:

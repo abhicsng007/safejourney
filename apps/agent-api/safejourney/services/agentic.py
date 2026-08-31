@@ -261,17 +261,50 @@ def _validate_action(
 # 3. Grounded "why this route" reasoning for the plan screen
 # ---------------------------------------------------------------------------
 
-def plan_reasoning(plan: dict, mode: str) -> Optional[dict]:
+def plan_reasoning(
+    plan: dict,
+    mode: str,
+    origin: tuple[float, float] | None = None,
+    dest: tuple[float, float] | None = None,
+    on_event=None,
+) -> Optional[dict]:
     """A short natural-language rationale for the recommended route, grounded strictly in the
-    already-computed plan. Returns {summary, provenance} or None when Gemini is unavailable."""
+    already-computed plan.
+
+    Returns {summary, provenance, trace, sources}. `trace` is the same schema the live
+    reasoning timeline uses; `sources` are clickable citations (label + url).
+    """
+    from ..sources import cite_plan, describe
+
     s = get_settings()
     provenance = _provenance(plan)
+    sources = cite_plan(plan, origin, dest)
+    trace = build_plan_trace(plan, mode, decided_by="gemini" if s.gemini_available else "rules")
+
+    def _emit(ev):
+        if not on_event:
+            return
+        try:
+            on_event(ev)
+        except Exception:
+            pass
+
+    _emit({"kind": "delegate", "from": "route_guardian", "to": "prep"})
+    _emit({"kind": "tool_call", "name": "get_precautions", "agent": "prep",
+           "args": {"mode": mode}})
+
     if not s.gemini_available:
-        return {"summary": plan.get("advice", ""), "provenance": provenance} if provenance else None
+        summary = plan.get("advice", "")
+        _emit({"kind": "tool_result", "name": "get_precautions", "agent": "prep",
+               "summary": summary or "Rule-based briefing ready."})
+        if not provenance and not sources and not summary:
+            return None
+        return {"summary": summary, "provenance": provenance, "trace": trace, "sources": sources}
 
     routes = plan.get("routes") or []
     if not routes:
-        return None
+        return {"summary": plan.get("advice", ""), "provenance": provenance,
+                "trace": trace, "sources": sources}
     lines = []
     for r in routes:
         hz = ", ".join(sorted({h.get("type") for h in (r.get("hazards") or [])})) or "clear"
@@ -294,7 +327,53 @@ def plan_reasoning(plan: dict, mode: str) -> Optional[dict]:
     except Exception as e:  # pragma: no cover
         print(f"[agentic] plan_reasoning failed ({e})")
         summary = None
-    return {"summary": summary or plan.get("advice", ""), "provenance": provenance}
+    summary = summary or plan.get("advice", "")
+    gem = describe("gemini")
+    if gem:
+        sources = list(sources) + [gem]
+        _emit({"kind": "cite", "source": gem})
+    _emit({"kind": "tool_result", "name": "get_precautions", "agent": "prep",
+           "summary": summary[:180] + ("…" if len(summary) > 180 else "")})
+    return {"summary": summary, "provenance": provenance, "trace": trace, "sources": sources}
+
+
+def build_plan_trace(plan: dict, mode: str, decided_by: str = "rules") -> list[dict]:
+    """Reconstruct the multi-agent hand-off for a finished plan so the UI can show it
+    even when the client didn't stream live events (refresh, fallback POST, etc.)."""
+    routes = plan.get("routes") or []
+    rec_id = plan.get("recommended_route_id")
+    rec = next((r for r in routes if r.get("route_id") == rec_id), routes[0] if routes else None)
+    n_hz = sum(len(r.get("hazards") or []) for r in routes)
+    kinds = sorted({
+        (h.get("type") or "").replace("_", " ")
+        for r in routes for h in (r.get("hazards") or [])
+        if h.get("type")
+    })
+    provenance = _provenance(plan)
+    rating = (rec or {}).get("rating") or ""
+    steps: list[dict] = [
+        {"kind": "delegate", "from": "guardian_core", "to": "route_guardian"},
+        {"kind": "tool_call", "name": "plan_safe_routes", "agent": "route_guardian",
+         "args": {"mode": mode}},
+        {"kind": "tool_result", "name": "plan_safe_routes", "agent": "route_guardian",
+         "summary": f"{len(routes)} candidate route(s) from Directions — scored on safety, not just speed."},
+        {"kind": "delegate", "from": "route_guardian", "to": "hazard_sentinel"},
+        {"kind": "tool_call", "name": "scan_route_hazards", "agent": "hazard_sentinel",
+         "args": {"feeds": ", ".join(provenance[:5]) or "weather · OSM · disasters"}},
+        {"kind": "tool_result", "name": "scan_route_hazards", "agent": "hazard_sentinel",
+         "summary": (
+             f"{n_hz} hazard(s) across {len(routes)} corridor(s)"
+             + (f": {', '.join(kinds[:5])}." if n_hz else " — corridors look clear.")
+         )},
+        {"kind": "delegate", "from": "hazard_sentinel", "to": "route_guardian"},
+        {"kind": "decision", "agent": "route_guardian",
+         "action": "clear" if rating == "safe" else "advisory",
+         "title": f"Safest of {len(routes)}: {rating}" if routes else "No route",
+         "reason": plan.get("advice") or "",
+         "decided_by": decided_by},
+        {"kind": "delegate", "from": "route_guardian", "to": "prep"},
+    ]
+    return steps
 
 
 def _provenance(plan: dict) -> list[str]:

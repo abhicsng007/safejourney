@@ -83,9 +83,9 @@ def route_web_advisories_debug(
             diag["error"] = "gemini_not_configured"
         elif not pts:
             diag["error"] = "empty_polyline"
-        return {"advisories": [], "diag": diag}
+        return {"advisories": [], "diag": diag, "citations": []}
 
-    from ..agents.llm import generate_with_search, parse_json_array
+    from ..agents.llm import generate_with_search_cited, parse_json_array
 
     import datetime as _dt
 
@@ -113,15 +113,21 @@ def route_web_advisories_debug(
         f"Only include items your search results actually support AND that are from the last "
         f"{_RECENCY_DAYS} days. If nothing credible and recent, return []."
     )
+    citations: list[dict] = []
     try:
-        text = generate_with_search(prompt, system=_SYSTEM)
+        cited = generate_with_search_cited(prompt, system=_SYSTEM)
     except Exception as e:  # generate_with_search already guards, but be defensive
         diag["error"] = f"search_failed: {e}"
-        return {"advisories": [], "diag": diag}
+        return {"advisories": [], "diag": diag, "citations": []}
 
-    if text is None:
+    if cited is None:
         diag["error"] = "search_returned_none"
-        return {"advisories": [], "diag": diag}
+        return {"advisories": [], "diag": diag, "citations": []}
+    text = cited.get("text")
+    citations = cited.get("citations") or []
+    if not text:
+        diag["error"] = "search_returned_none"
+        return {"advisories": [], "diag": diag, "citations": citations}
 
     diag["raw_len"] = len(text)
     diag["raw_preview"] = text[:500]
@@ -130,7 +136,7 @@ def route_web_advisories_debug(
     if not items:
         if text.strip() and text.strip() not in ("[]", "[ ]"):
             diag["error"] = "parse_empty"  # model replied but not a usable JSON array
-        return {"advisories": [], "diag": diag}
+        return {"advisories": [], "diag": diag, "citations": citations}
 
     from .geocode import geocode_search, geocode_resolve
 
@@ -160,6 +166,12 @@ def route_web_advisories_debug(
             diag["dropped_too_far"] += 1
             continue
         htype = it.get("type") if it.get("type") in _TYPE_SEV else "other"
+        url = _match_citation(loc, summary, citations)
+        if not url:
+            # Honest fallback: a search that surfaces the same claim, labelled as such in the UI.
+            from urllib.parse import quote_plus
+            q = f"{loc} {summary}"[:160]
+            url = f"https://www.google.com/search?q={quote_plus(q)}"
         out.append({
             "type": htype,
             "severity": _TYPE_SEV[htype],
@@ -169,9 +181,29 @@ def route_web_advisories_debug(
             "summary": summary,
             "date": report_date,
             "source": it.get("source") or "web",
+            "url": url,
         })
     diag["kept"] = len(out)
-    return {"advisories": out, "diag": diag}
+    return {"advisories": out, "diag": diag, "citations": citations}
+
+
+def _match_citation(locality: str, summary: str, citations: list[dict]) -> str:
+    """Pick the grounding chunk whose title/url best matches this advisory, else first url."""
+    if not citations:
+        return ""
+    tokens = [t for t in (locality or "").replace("-", " ").split() if len(t) > 3]
+    if tokens:
+        low_tokens = [t.lower() for t in tokens]
+        for c in citations:
+            hay = f"{c.get('title') or ''} {c.get('url') or ''}".lower()
+            if any(t in hay for t in low_tokens):
+                return c.get("url") or ""
+    # Prefer a news-like URL over a generic google.com landing.
+    for c in citations:
+        u = c.get("url") or ""
+        if u and "google.com" not in u:
+            return u
+    return citations[0].get("url") or ""
 
 
 def _region_hints(origin_label: str, dest_label: str) -> list[str]:

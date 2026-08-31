@@ -54,14 +54,53 @@ def score_route(
     )
 
 
+def _emit(on_event, event: dict) -> None:
+    if not on_event:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        pass
+
+
 def plan_and_score(
     origin: tuple[float, float],
     dest: tuple[float, float],
     mode: str = "two_wheeler",
     risk_tolerance: float = 1.0,
+    on_event=None,
 ) -> dict:
-    """Return safety-ranked candidate routes + a recommendation."""
+    """Return safety-ranked candidate routes + a recommendation.
+
+    `on_event`, when given, is called with structured trace dicts as each specialist
+    agent hands off — the same schema the UI reasoning timeline already renders.
+    """
+    from ..sources import describe
+
+    _emit(on_event, {"kind": "delegate", "from": "guardian_core", "to": "route_guardian"})
+    _emit(on_event, {
+        "kind": "tool_call", "name": "plan_safe_routes", "agent": "route_guardian",
+        "args": {"mode": mode},
+    })
     candidates = plan_routes(origin, dest, mode)
+    src_name = (candidates[0].get("source") if candidates else "") or "google-directions"
+    _emit(on_event, {
+        "kind": "tool_result", "name": "plan_safe_routes", "agent": "route_guardian",
+        "summary": (
+            f"{len(candidates)} candidate route(s) from Directions — now scoring each on safety, "
+            "not just speed."
+        ),
+    })
+    cited = describe(src_name, origin=origin, dest=dest)
+    if cited:
+        _emit(on_event, {"kind": "cite", "source": cited})
+
+    _emit(on_event, {"kind": "delegate", "from": "route_guardian", "to": "hazard_sentinel"})
+    _emit(on_event, {
+        "kind": "tool_call", "name": "scan_route_hazards", "agent": "hazard_sentinel",
+        "args": {"corridors": len(candidates), "feeds": "weather · OSM · disasters · blackspots"},
+    })
+
     # Score candidates concurrently — each scan_corridor does its own network fan-out, so
     # scoring 3 routes serially tripled the plan latency. One worker per candidate.
     if len(candidates) > 1:
@@ -76,12 +115,63 @@ def plan_and_score(
     recommended = ranked[0] if ranked else None
     all_blocking = bool(ranked) and all(r.blocking for r in ranked)
 
+    # Cite every distinct feed that actually returned a hazard (or conditions).
+    seen_src: set[str] = set()
+    n_hz = 0
+    kinds: set[str] = set()
+    for r in ranked:
+        n_hz += len(r.hazards)
+        for h in r.hazards:
+            kinds.add(h.type.value.replace("_", " "))
+            sid = (h.source or "").split(":")[0]
+            if sid and sid not in seen_src:
+                seen_src.add(sid)
+                c = describe(h.source, origin=origin, dest=dest)
+                if c:
+                    _emit(on_event, {"kind": "cite", "source": c})
+
+    kinds_s = ", ".join(sorted(kinds)[:5]) or "none"
+    _emit(on_event, {
+        "kind": "tool_result", "name": "scan_route_hazards", "agent": "hazard_sentinel",
+        "summary": (
+            f"{n_hz} hazard(s) across {len(ranked)} corridor(s)"
+            + (f": {kinds_s}." if n_hz else " — corridors look clear.")
+        ),
+    })
+
     # Pre-trip environmental briefing (weather / visibility / air quality). Fold the fog +
     # unhealthy-air hazards it finds into the recommended route so they score, show on the map,
     # and warn during the drive like any other hazard — and keep the summary for the UI card.
     conditions = _unavailable_conditions()
     if recommended is not None:
+        _emit(on_event, {
+            "kind": "tool_call", "name": "check_trip_now", "agent": "prep",
+            "args": {"layer": "weather · visibility · AQI"},
+        })
         conditions = _apply_conditions(recommended, mode, risk_tolerance)
+        cond_src = conditions.get("source")
+        if cond_src and cond_src != "unavailable":
+            c = describe(cond_src, origin=origin, dest=dest)
+            if c:
+                _emit(on_event, {"kind": "cite", "source": c})
+        w = (conditions.get("weather") or {}).get("label") or "conditions"
+        _emit(on_event, {
+            "kind": "tool_result", "name": "check_trip_now", "agent": "prep",
+            "summary": f"Briefing: {w}.",
+        })
+
+    _emit(on_event, {"kind": "delegate", "from": "hazard_sentinel", "to": "route_guardian"})
+    rating = classify_score(recommended.score) if recommended is not None else ""
+    _emit(on_event, {
+        "kind": "decision",
+        "agent": "route_guardian",
+        "action": "clear" if rating == "safe" else "advisory",
+        "title": (
+            f"Safest of {len(ranked)}: {rating}" if ranked else "No route"
+        ),
+        "reason": _plan_advice(ranked, all_blocking),
+        "decided_by": "route_guardian",
+    })
 
     result = {
         "routes": [r.to_dict() for r in ranked],
@@ -155,13 +245,14 @@ def plan_journey(
     dest: tuple[float, float],
     mode: str = "two_wheeler",
     risk_tolerance: float = 1.0,
+    on_event=None,
 ) -> dict:
     """plan_and_score + the home→station first leg for transit journeys.
 
     Kept separate from plan_and_score so the monitor's reroute path stays lean (no station
     lookups on every tick) — only the planning entry points compose the full journey.
     """
-    plan = plan_and_score(origin, dest, mode, risk_tolerance)
+    plan = plan_and_score(origin, dest, mode, risk_tolerance, on_event=on_event)
     leg = first_mile_leg(origin, mode, risk_tolerance)
     if leg:
         plan["first_leg"] = leg

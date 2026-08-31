@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import { decodePolyline, bounds } from "../lib/polyline.js";
 import { SEVERITY_COLOR, RATING_COLOR, HAZARD_ICON, hazardLabel } from "../lib/hazards.js";
+import { ScanHud } from "./Reasoning.jsx";
 
 const OSM_STYLE = {
   version: 8,
@@ -73,6 +74,8 @@ export default function MapView({
   followTraveler,
   onMapClick,
   scanning,
+  scanTrace = [],
+  scanSources = [],
   fitKey,
   focusPoint,
 }) {
@@ -248,9 +251,12 @@ export default function MapView({
         f.label, PED_HINT[f.type] || "Safe place to cross on foot."));
     webAdvisories.forEach((a) => {
       const when = a.date ? ` · reported ${fmtReportDate(a.date)}` : "";
+      const srcLink = a.url
+        ? `<br/><a href="${a.url}" target="_blank" rel="noopener noreferrer" style="color:#c9a227">source: ${a.source || "web"} ↗</a>${when} <i>(unverified)</i>`
+        : `<br/><i>source: ${a.source || "web"}${when} (unverified)</i>`;
       addLabeled([a.lng, a.lat], marker("#c9a227", "🌐", 22),
         `Web report · ${a.locality || ""}`,
-        `${a.summary || ""}<br/><i>source: ${a.source || "web"}${when} (unverified)</i>`);
+        `${a.summary || ""}${srcLink}`);
     });
 
     function addLabeled(lngLat, el, title, why) {
@@ -387,6 +393,7 @@ export default function MapView({
   return (
     <div className="map-wrap">
       <div className="map" ref={ref} />
+      <ScanHud trace={scanTrace} sources={scanSources} visible={scanning} />
       <ConditionsCard conditions={conditions} />
       <div className="legend">
         <div className="row"><span className="sw" style={{ background: "#33d08c" }} />Safe</div>

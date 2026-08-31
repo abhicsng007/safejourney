@@ -101,3 +101,41 @@ def test_provenance_extracted_from_plan():
     prov = agentic._provenance(plan)
     assert "open-meteo" in prov and "gdacs" in prov and "report" in prov
     assert "google-directions" in prov
+
+
+def test_plan_trace_shows_multiagent_handoff():
+    plan = {
+        "routes": [
+            {"route_id": "g0", "rating": "caution", "score": 4,
+             "meta": {"source": "google-directions"},
+             "hazards": [{"type": "flood", "source": "open-meteo"}]},
+        ],
+        "recommended_route_id": "g0",
+        "advice": "Take the safer corridor.",
+    }
+    trace = agentic.build_plan_trace(plan, "two_wheeler", decided_by="rules")
+    kinds = [t["kind"] for t in trace]
+    assert "delegate" in kinds and "tool_call" in kinds and "decision" in kinds
+    tos = [t.get("to") for t in trace if t["kind"] == "delegate"]
+    assert "route_guardian" in tos and "hazard_sentinel" in tos and "prep" in tos
+    decision = next(t for t in trace if t["kind"] == "decision")
+    assert decision["action"] == "advisory"
+
+
+def test_cite_plan_has_clickable_urls():
+    from safejourney.sources import cite_plan
+    plan = {
+        "routes": [
+            {"route_id": "g0", "meta": {"source": "google-directions"},
+             "hazards": [{"source": "open-meteo"}, {"source": "gdacs"}]},
+        ],
+        "conditions": {"source": "open-meteo"},
+    }
+    origin, dest = (12.97, 77.60), (12.96, 77.75)
+    cites = cite_plan(plan, origin, dest)
+    ids = {c["id"] for c in cites}
+    assert "open-meteo" in ids and "gdacs" in ids and "google-directions" in ids
+    maps = next(c for c in cites if c["id"] == "google-directions")
+    assert maps["url"].startswith("https://www.google.com/maps/dir/")
+    meteo = next(c for c in cites if c["id"] == "open-meteo")
+    assert meteo["url"].startswith("http")

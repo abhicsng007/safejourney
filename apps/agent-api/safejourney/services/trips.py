@@ -29,11 +29,13 @@ def create_trip(
     origin_label: str = "",
     destination_label: str = "",
     risk_tolerance: float = 1.0,
+    on_event=None,
 ) -> dict:
     """Plan + score routes (incl. the home→station first leg), create the trip on the
     recommended (safest) route."""
     plan = plan_journey(
-        (origin.lat, origin.lng), (destination.lat, destination.lng), mode, risk_tolerance
+        (origin.lat, origin.lng), (destination.lat, destination.lng), mode, risk_tolerance,
+        on_event=on_event,
     )
     routes = plan["routes"]
     chosen = next((r for r in routes if r["route_id"] == plan["recommended_route_id"]), routes[0] if routes else None)

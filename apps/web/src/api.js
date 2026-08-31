@@ -12,12 +12,69 @@ async function req(path, opts = {}) {
   return res.json();
 }
 
+async function readSse(res, onEvent) {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let result = null;
+  let error = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const block of parts) {
+      const line = block.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      let ev;
+      try {
+        ev = JSON.parse(line.slice(5).trim());
+      } catch {
+        continue;
+      }
+      if (ev.kind === "done") result = ev.result;
+      else if (ev.kind === "error") error = ev.message || "stream error";
+      else onEvent?.(ev);
+    }
+  }
+  if (error) throw new Error(error);
+  return result;
+}
+
 export const api = {
   base: BASE,
   health: () => req("/health"),
   config: () => req("/config"),
   plan: (body) => req("/plan", { method: "POST", body: JSON.stringify(body) }),
   createTrip: (body) => req("/trips", { method: "POST", body: JSON.stringify(body) }),
+  /** Stream multi-agent hand-offs while a trip is planned. Falls back to POST /trips. */
+  createTripLive: async (body, onEvent, signal) => {
+    try {
+      const res = await fetch(`${BASE}/trips/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (res.status === 404 || res.status === 405) {
+        return req("/trips", { method: "POST", body: JSON.stringify(body), signal });
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`${res.status} ${text}`);
+      }
+      if (!res.body) {
+        return req("/trips", { method: "POST", body: JSON.stringify(body), signal });
+      }
+      const result = await readSse(res, onEvent);
+      if (result) return result;
+      return req("/trips", { method: "POST", body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      return req("/trips", { method: "POST", body: JSON.stringify(body), signal });
+    }
+  },
   getTrip: (id) => req(`/trips/${id}`),
   chooseRoute: (id, route) =>
     req(`/trips/${id}/choose-route`, { method: "POST", body: JSON.stringify({ route }) }),
